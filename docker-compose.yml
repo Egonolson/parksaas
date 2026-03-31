@@ -1,0 +1,79 @@
+version: '3.9'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: parksaas-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: parksaas
+      POSTGRES_USER: parksaas
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U parksaas"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: parksaas-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://parksaas:${POSTGRES_PASSWORD:-changeme}@db:5432/parksaas
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_OPERATOR_SECRET: ${JWT_OPERATOR_SECRET}
+      JWT_ADMIN_SECRET: ${JWT_ADMIN_SECRET}
+      MOLLIE_CLIENT_ID: ${MOLLIE_CLIENT_ID}
+      MOLLIE_CLIENT_SECRET: ${MOLLIE_CLIENT_SECRET}
+      MOLLIE_REDIRECT_URI: ${MOLLIE_REDIRECT_URI}
+      API_BASE: ${API_BASE}
+      FRONTEND_BASE: ${FRONTEND_BASE}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      NODE_ENV: production
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${API_BASE}/api/v1
+    container_name: parksaas-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:80"
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:alpine
+    container_name: parksaas-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  db_data:
