@@ -3,22 +3,6 @@ import api from '../lib/api'
 import Modal from '../components/Modal'
 import SpotGrid from '../components/SpotGrid'
 
-const MOCK_LOCATIONS = [
-  { id: 1, name: 'Parkhaus Nord' },
-  { id: 2, name: 'Parkplatz Sued' },
-]
-
-const MOCK_SPOTS = [
-  { id: 1, number: 'A-01', location_id: 1, status: 'occupied', price: 120 },
-  { id: 2, number: 'A-02', location_id: 1, status: 'free', price: 120 },
-  { id: 3, number: 'A-03', location_id: 1, status: 'free', price: 120 },
-  { id: 4, number: 'A-04', location_id: 1, status: 'reserved', price: 95 },
-  { id: 5, number: 'B-01', location_id: 1, status: 'free', price: 100 },
-  { id: 6, number: 'B-02', location_id: 1, status: 'occupied', price: 100 },
-  { id: 7, number: 'B-03', location_id: 2, status: 'free', price: 80 },
-  { id: 8, number: 'B-04', location_id: 2, status: 'occupied', price: 80 },
-]
-
 const STATUS_LABELS = {
   free: 'Frei',
   occupied: 'Belegt',
@@ -51,8 +35,8 @@ export default function Spots() {
       setLocations(locRes.data.locations || locRes.data)
       setSpots(spotsRes.data.spots || spotsRes.data)
     } catch {
-      setLocations(MOCK_LOCATIONS)
-      setSpots(MOCK_SPOTS)
+      setLocations([])
+      setSpots([])
     } finally {
       setLoading(false)
     }
@@ -73,7 +57,7 @@ export default function Spots() {
     const errs = {}
     if (!form.location_id) errs.location_id = 'Standort erforderlich'
     if (!form.number.trim()) errs.number = 'Nummer erforderlich'
-    if (!form.price || isNaN(parseFloat(form.price))) errs.price = 'Gueltiger Preis erforderlich'
+    if (!form.price || isNaN(parseFloat(form.price))) errs.price = 'Gültiger Preis erforderlich'
     return errs
   }
 
@@ -84,7 +68,7 @@ export default function Spots() {
     setSaving(true)
     try {
       const res = await api.post('/spots', {
-        location_id: parseInt(form.location_id),
+        location_id: form.location_id,
         number: form.number,
         price: parseFloat(form.price),
       })
@@ -99,12 +83,12 @@ export default function Spots() {
 
   const handleBulkCreate = async (e) => {
     e.preventDefault()
-    if (!bulkForm.location_id) { alert('Bitte Standort auswaehlen'); return }
+    if (!bulkForm.location_id) { alert('Bitte Standort auswählen'); return }
     if (bulkForm.from >= bulkForm.to) { alert('Von muss kleiner als Bis sein'); return }
     setSaving(true)
     try {
       await api.post('/spots/bulk', {
-        location_id: parseInt(bulkForm.location_id),
+        location_id: bulkForm.location_id,
         prefix: bulkForm.prefix,
         from: parseInt(bulkForm.from),
         to: parseInt(bulkForm.to),
@@ -125,7 +109,7 @@ export default function Spots() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Stellplaetze</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Stellplätze</h1>
           <p className="text-gray-500 text-sm mt-1">
             {stats.total} Spots &bull; {stats.free} frei &bull; {stats.occupied} belegt
           </p>
@@ -247,10 +231,10 @@ export default function Spots() {
               value={form.location_id}
               onChange={e => setForm(p => ({ ...p, location_id: e.target.value }))}
             >
-              <option value="">Standort auswaehlen...</option>
-              {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
-            {formErrors.location_id && <p className="text-red-500 text-xs mt-1">{formErrors.location_id}</p>}
+              <option value="">Standort auswählen...</option>
+             {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+           </select>
+           {formErrors.location_id && <p className="text-red-500 text-xs mt-1">{formErrors.location_id}</p>}
           </div>
           <div>
             <label className="label">Spot-Nummer / Bezeichnung</label>
@@ -288,7 +272,7 @@ export default function Spots() {
       <Modal isOpen={bulkModalOpen} onClose={() => setBulkModalOpen(false)} title="Spots in Bulk anlegen">
         <form onSubmit={handleBulkCreate} className="space-y-4">
           <p className="text-gray-500 text-sm">
-            Legt mehrere Stellplaetze auf einmal an. Die Bezeichnungen werden automatisch generiert (z.B. "Spot 1", "Spot 2", ...).
+            Legt mehrere Stellplätze auf einmal an. Die Bezeichnungen werden automatisch generiert (z.B. "Spot 1", "Spot 2", ...).
           </p>
           <div>
             <label className="label">Standort</label>
@@ -297,12 +281,12 @@ export default function Spots() {
               value={bulkForm.location_id}
               onChange={e => setBulkForm(p => ({ ...p, location_id: e.target.value }))}
             >
-              <option value="">Standort auswaehlen...</option>
-              {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="label">Praefix (Bezeichnung)</label>
+              <option value="">Standort auswählen...</option>
+             {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+           </select>
+         </div>
+         <div>
+            <label className="label">Präfix (Bezeichnung)</label>
             <input
               className="input-field"
               value={bulkForm.prefix}
@@ -344,7 +328,7 @@ export default function Spots() {
               placeholder="120.00"
             />
           </div>
-          <div className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 text-xs text-blue-700">
+          <div className="bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 text-xs text-emerald-700">
             Es werden {Math.max(0, parseInt(bulkForm.to || 0) - parseInt(bulkForm.from || 0) + 1)} Spots angelegt:
             "{bulkForm.prefix} {bulkForm.from}" bis "{bulkForm.prefix} {bulkForm.to}"
           </div>

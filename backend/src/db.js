@@ -18,7 +18,7 @@ function initPool() {
     max: parseInt(process.env.DB_POOL_MAX || '10', 10),
     idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT_MS || '30000', 10),
     connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT_MS || '5000', 10),
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : false,
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: true } : false,
   });
 
   pool.on('connect', () => {

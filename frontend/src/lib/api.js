@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: '/api/v1',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -19,14 +19,25 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 )
 
-// Response interceptor: handle 401 globally
+// Response interceptor: handle 401 globally (skip for auth endpoints)
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('operator')
-      window.location.href = '/login'
+    const url = error.config?.url || ''
+    const isAuthRequest = url.includes('/auth/')
+    if (error.response?.status === 401 && !isAuthRequest) {
+      const isAdmin = url.includes('/platform/')
+      const isCustomer = !!localStorage.getItem('customer')
+      if (isAdmin) {
+        localStorage.removeItem('token')
+        localStorage.removeItem('admin')
+        window.location.href = '/admin/login'
+      } else {
+        localStorage.removeItem('token')
+        localStorage.removeItem('operator')
+        localStorage.removeItem('customer')
+        window.location.href = isCustomer ? '/kunde/login' : '/login'
+      }
     }
     return Promise.reject(error)
   }

@@ -3,35 +3,21 @@ import { useParams } from 'react-router-dom'
 import axios from 'axios'
 import SpotGrid from '../components/SpotGrid'
 
-const MOCK_OPERATOR = {
-  company_name: 'Parkhaus Mitte GmbH',
-  slug: 'parkhaus-mitte',
-}
-
-const MOCK_SPOTS = [
-  { id: 1, number: 'A-01', status: 'occupied', price: 120 },
-  { id: 2, number: 'A-02', status: 'free', price: 120 },
-  { id: 3, number: 'A-03', status: 'free', price: 120 },
-  { id: 4, number: 'A-04', status: 'reserved', price: 95 },
-  { id: 5, number: 'B-01', status: 'free', price: 100 },
-  { id: 6, number: 'B-02', status: 'occupied', price: 100 },
-  { id: 7, number: 'B-03', status: 'free', price: 80 },
-  { id: 8, number: 'B-04', status: 'occupied', price: 80 },
-  { id: 9, number: 'B-05', status: 'free', price: 80 },
-  { id: 10, number: 'C-01', status: 'free', price: 110 },
-  { id: 11, number: 'C-02', status: 'reserved', price: 110 },
-  { id: 12, number: 'C-03', status: 'occupied', price: 110 },
-]
-
-const MOCK_LOCATION = {
-  id: 1,
-  name: 'Hauptgebaeude',
-  address: 'Musterstrasse 1',
-  zip: '20095',
-  city: 'Hamburg',
+const DURATION_TYPES = {
+  '30min': '30 Minuten',
+  '1h': '1 Stunde',
+  '2h': '2 Stunden',
+  '4h': '4 Stunden',
+  'daily': 'Tagesticket',
+  'weekly': 'Wochenpass',
+  'monthly': 'Monatsmiete',
+  'yearly': 'Jahresmiete',
 }
 
 const EMPTY_FORM = {
+  customer_type: 'private',
+  company_name: '',
+  tax_id: '',
   name: '',
   email: '',
   phone: '',
@@ -46,13 +32,18 @@ export default function PublicBooking() {
   const [operator, setOperator] = useState(null)
   const [location, setLocation] = useState(null)
   const [spots, setSpots] = useState([])
+  const [durations, setDurations] = useState([])
   const [selectedSpot, setSelectedSpot] = useState(null)
+  const [selectedDuration, setSelectedDuration] = useState(null)
   const [form, setForm] = useState(EMPTY_FORM)
   const [formErrors, setFormErrors] = useState({})
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
   const [step, setStep] = useState('select') // 'select' | 'form' | 'success'
+
+  const formatPrice = (amount) =>
+    new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount)
 
   useEffect(() => {
     const fetchData = async () => {
@@ -61,10 +52,18 @@ export default function PublicBooking() {
         setOperator(res.data.operator)
         setLocation(res.data.location)
         setSpots(res.data.spots || [])
+
+        // Load durations for the location
+        if (res.data.location?.id) {
+          try {
+            const durRes = await axios.get(`/api/v1/locations/${res.data.location.id}/durations`)
+            setDurations(durRes.data.durations || durRes.data || [])
+          } catch {
+            setDurations([])
+          }
+        }
       } catch {
-        setOperator(MOCK_OPERATOR)
-        setLocation(MOCK_LOCATION)
-        setSpots(MOCK_SPOTS)
+        setError('Parkplatz konnte nicht geladen werden.')
       } finally {
         setLoading(false)
       }
@@ -74,6 +73,11 @@ export default function PublicBooking() {
 
   const handleSpotSelect = (spot) => {
     setSelectedSpot(spot)
+    setSelectedDuration(null)
+  }
+
+  const handleDurationSelect = (duration) => {
+    setSelectedDuration(duration)
     setStep('form')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -81,12 +85,13 @@ export default function PublicBooking() {
   const validate = () => {
     const errs = {}
     if (!form.name.trim()) errs.name = 'Name erforderlich'
-    if (!form.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) errs.email = 'Gueltige E-Mail erforderlich'
+    if (!form.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) errs.email = 'Gültige E-Mail erforderlich'
     if (!form.phone.trim()) errs.phone = 'Telefon erforderlich'
     if (!form.license_plate.trim()) errs.license_plate = 'Kennzeichen erforderlich'
     if (!form.street.trim()) errs.street = 'Adresse erforderlich'
     if (!form.zip.trim()) errs.zip = 'PLZ erforderlich'
     if (!form.city.trim()) errs.city = 'Stadt erforderlich'
+    if (form.customer_type === 'business' && !form.company_name.trim()) errs.company_name = 'Firmenname erforderlich'
     return errs
   }
 
@@ -98,10 +103,23 @@ export default function PublicBooking() {
     setSubmitting(true)
     setError(null)
     try {
-      const res = await axios.post(`/api/public/${slug}/book`, {
+      const bookingData = {
         spot_id: selectedSpot.id,
-        ...form,
-      })
+        duration_type: selectedDuration?.duration_type || null,
+        customer_type: form.customer_type,
+        name: form.name,
+        email: form.email,
+        phone: form.phone,
+        license_plate: form.license_plate,
+        street: form.street,
+        zip: form.zip,
+        city: form.city,
+      }
+      if (form.customer_type === 'business') {
+        bookingData.company_name = form.company_name
+        bookingData.tax_id = form.tax_id
+      }
+      const res = await axios.post(`/api/public/${slug}/book`, bookingData)
       if (res.data.checkout_url) {
         window.location.href = res.data.checkout_url
       } else {
@@ -118,7 +136,7 @@ export default function PublicBooking() {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
-          <div className="w-8 h-8 border-2 border-blue-800 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+          <div className="w-8 h-8 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
           <p className="text-gray-500 text-sm">Lade...</p>
         </div>
       </div>
@@ -147,10 +165,10 @@ export default function PublicBooking() {
           </div>
           <h2 className="text-2xl font-bold text-gray-900 mb-2">Buchung eingegangen!</h2>
           <p className="text-gray-500 mb-2">
-            Ihre Buchung fuer Spot <strong>{selectedSpot?.number}</strong> wurde eingegangen.
+            Ihre Buchung für Spot <strong>{selectedSpot?.number}</strong> wurde eingegangen.
           </p>
           <p className="text-gray-500 text-sm">
-            Sie erhalten in Kuerze eine Bestaetigung an <strong>{form.email}</strong>.
+            Sie erhalten in Kürze eine Bestätigung an <strong>{form.email}</strong>.
           </p>
         </div>
       </div>
@@ -160,21 +178,21 @@ export default function PublicBooking() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="bg-blue-900 text-white">
+      <div className="gradient-hero text-white">
         <div className="max-w-4xl mx-auto px-6 py-8">
           <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 bg-blue-700 rounded-xl flex items-center justify-center">
+            <div className="w-10 h-10 bg-emerald-600 rounded-xl flex items-center justify-center">
               <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
               </svg>
             </div>
             <div>
-              <h1 className="text-xl font-bold">{operator.company_name}</h1>
-              <p className="text-blue-300 text-sm">Stellplatz buchen</p>
+              <h1 className="text-xl font-bold">{operator.company_name || operator.name}</h1>
+              <p className="text-emerald-200 text-sm">Stellplatz buchen</p>
             </div>
           </div>
           {location && (
-            <div className="flex items-center gap-2 text-blue-200 text-sm">
+            <div className="flex items-center gap-2 text-emerald-200 text-sm">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
               </svg>
@@ -187,15 +205,15 @@ export default function PublicBooking() {
       <div className="max-w-4xl mx-auto px-6 py-8">
         {/* Step indicator */}
         <div className="flex items-center gap-3 mb-8">
-          <div className={`flex items-center gap-2 text-sm font-medium ${step === 'select' ? 'text-blue-800' : 'text-gray-400'}`}>
-            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${step === 'select' ? 'bg-blue-800 text-white' : 'bg-green-500 text-white'}`}>
+          <div className={`flex items-center gap-2 text-sm font-medium ${step === 'select' ? 'text-emerald-700' : 'text-gray-400'}`}>
+            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${step === 'select' ? 'bg-emerald-600 text-white' : 'bg-green-500 text-white'}`}>
               {step === 'form' ? '✓' : '1'}
             </span>
-            Spot auswaehlen
+            Spot auswählen
           </div>
           <div className="flex-1 h-px bg-gray-200" />
-          <div className={`flex items-center gap-2 text-sm font-medium ${step === 'form' ? 'text-blue-800' : 'text-gray-400'}`}>
-            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${step === 'form' ? 'bg-blue-800 text-white' : 'bg-gray-200 text-gray-500'}`}>
+          <div className={`flex items-center gap-2 text-sm font-medium ${step === 'form' ? 'text-emerald-700' : 'text-gray-400'}`}>
+            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${step === 'form' ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-500'}`}>
               2
             </span>
             Ihre Daten
@@ -208,10 +226,79 @@ export default function PublicBooking() {
         </div>
 
         {step === 'select' && (
-          <div className="bg-white rounded-xl border border-gray-200 p-6">
-            <h2 className="font-semibold text-gray-900 mb-1">Freien Stellplatz auswaehlen</h2>
-            <p className="text-gray-500 text-sm mb-6">Klicken Sie auf einen gruen markierten Stellplatz, um ihn zu buchen.</p>
-            <SpotGrid spots={spots} onSpotClick={handleSpotSelect} interactive={true} />
+          <div className="space-y-6">
+            <div className="bg-white rounded-xl border border-gray-200 p-6">
+              <h2 className="font-semibold text-gray-900 mb-1">Freien Stellplatz auswählen</h2>
+              <p className="text-gray-500 text-sm mb-6">Klicken Sie auf einen grün markierten Stellplatz, um ihn zu buchen.</p>
+              <SpotGrid spots={spots} onSpotClick={handleSpotSelect} interactive={true} selectedSpot={selectedSpot} />
+              {spots.length === 0 && (
+                <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+                  <p className="font-semibold">Aktuell sind keine buchbaren Stellplätze verfügbar.</p>
+                  <p className="mt-1 text-emerald-800">
+                    Betreiber-Hinweis: Legen Sie im Dashboard einen Standort und mindestens einen freien Stellplatz mit Tarif an.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <a href="/register" className="inline-flex items-center rounded-md bg-emerald-600 px-3 py-1.5 text-white hover:bg-emerald-700">
+                      Betreiberkonto erstellen
+                    </a>
+                    <a href="/login" className="inline-flex items-center rounded-md border border-emerald-300 px-3 py-1.5 text-emerald-800 hover:bg-emerald-100">
+                      Als Betreiber anmelden
+                    </a>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Duration selection */}
+            {selectedSpot && (
+              <div className="bg-white rounded-xl border border-gray-200 p-6">
+                <h2 className="font-semibold text-gray-900 mb-1">Parkdauer wählen</h2>
+                <p className="text-gray-500 text-sm mb-4">
+                  Spot <strong>{selectedSpot.number}</strong> ausgewählt. Bitte wählen Sie eine Parkdauer.
+                </p>
+                {durations.length === 0 ? (
+                  <div className="text-center py-6 text-gray-400 text-sm">
+                    <p>Keine Parkdauern verfügbar. Bitte kontaktieren Sie den Betreiber.</p>
+                    {/* Allow continuing without duration if none are configured */}
+                    <button
+                      onClick={() => { setSelectedDuration(null); setStep('form'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+                      className="mt-4 bg-emerald-600 text-white px-6 py-2.5 rounded-xl font-semibold text-sm hover:bg-emerald-700 transition-colors"
+                    >
+                      Weiter ohne Parkdauer
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {durations.map(d => (
+                      <button
+                        key={d.id}
+                        onClick={() => handleDurationSelect(d)}
+                        className="flex items-center justify-between p-4 rounded-xl border-2 border-gray-200 hover:border-emerald-400 hover:bg-emerald-50 transition-all text-left group"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center group-hover:bg-emerald-200 transition-colors">
+                            <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                          </div>
+                          <div>
+                            <p className="font-medium text-gray-900 text-sm">
+                              {DURATION_TYPES[d.duration_type] || d.duration_type}
+                            </p>
+                            <p className="text-emerald-600 font-semibold text-sm">
+                              {formatPrice(d.price)}
+                            </p>
+                          </div>
+                        </div>
+                        <svg className="w-5 h-5 text-gray-300 group-hover:text-emerald-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -226,17 +313,29 @@ export default function PublicBooking() {
                   <div className="text-green-700 text-sm font-medium">{location?.name}</div>
                   <div className="text-green-600 text-xs mt-1">{location?.address}</div>
                 </div>
-                <div className="flex justify-between text-sm mb-2">
-                  <span className="text-gray-500">Monatlich</span>
-                  <span className="font-semibold text-gray-900">
-                    {new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(selectedSpot.price || 0)}
-                  </span>
-                </div>
+                {selectedDuration && (
+                  <div className="flex justify-between text-sm mb-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                    <span className="text-emerald-700 font-medium">
+                      {DURATION_TYPES[selectedDuration.duration_type] || selectedDuration.duration_type}
+                    </span>
+                    <span className="font-semibold text-emerald-800">
+                      {formatPrice(selectedDuration.price)}
+                    </span>
+                  </div>
+                )}
+                {!selectedDuration && selectedSpot.price > 0 && (
+                  <div className="flex justify-between text-sm mb-2">
+                    <span className="text-gray-500">Preis</span>
+                    <span className="font-semibold text-gray-900">
+                      {formatPrice(selectedSpot.price)}
+                    </span>
+                  </div>
+                )}
                 <button
-                  onClick={() => { setSelectedSpot(null); setStep('select') }}
-                  className="w-full text-center text-xs text-blue-700 hover:underline mt-2"
+                  onClick={() => { setSelectedSpot(null); setSelectedDuration(null); setStep('select') }}
+                  className="w-full text-center text-xs text-emerald-600 hover:underline mt-2"
                 >
-                  Anderen Spot auswaehlen
+                  Andere Auswahl treffen
                 </button>
               </div>
             </div>
@@ -253,6 +352,60 @@ export default function PublicBooking() {
                 )}
 
                 <form onSubmit={handleSubmit} className="space-y-4">
+                  {/* Customer type selection */}
+                  <div>
+                    <label className="label mb-2">Kundentyp</label>
+                    <div className="flex gap-4">
+                      <label className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border-2 cursor-pointer transition-all ${form.customer_type === 'private' ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}>
+                        <input
+                          type="radio"
+                          name="customer_type"
+                          value="private"
+                          checked={form.customer_type === 'private'}
+                          onChange={e => { setForm(p => ({ ...p, customer_type: e.target.value })); setFormErrors(p => ({ ...p, customer_type: null })) }}
+                          className="text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <span className="text-sm font-medium">Privat</span>
+                      </label>
+                      <label className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border-2 cursor-pointer transition-all ${form.customer_type === 'business' ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}>
+                        <input
+                          type="radio"
+                          name="customer_type"
+                          value="business"
+                          checked={form.customer_type === 'business'}
+                          onChange={e => { setForm(p => ({ ...p, customer_type: e.target.value })); setFormErrors(p => ({ ...p, customer_type: null })) }}
+                          className="text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <span className="text-sm font-medium">Geschäftlich</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Business fields */}
+                  {form.customer_type === 'business' && (
+                    <div className="space-y-3 bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+                      <div>
+                        <label className="label">Firmenname</label>
+                        <input
+                          className={`input-field ${formErrors.company_name ? 'border-red-400' : ''}`}
+                          value={form.company_name}
+                          onChange={e => { setForm(p => ({ ...p, company_name: e.target.value })); setFormErrors(p => ({ ...p, company_name: null })) }}
+                          placeholder="Muster GmbH"
+                        />
+                        {formErrors.company_name && <p className="text-red-500 text-xs mt-1">{formErrors.company_name}</p>}
+                      </div>
+                      <div>
+                        <label className="label">Steuernummer / USt-IdNr.</label>
+                        <input
+                          className="input-field"
+                          value={form.tax_id}
+                          onChange={e => { setForm(p => ({ ...p, tax_id: e.target.value })) }}
+                          placeholder="DE123456789"
+                        />
+                      </div>
+                    </div>
+                  )}
+
                   <div>
                     <label className="label">Vor- und Nachname</label>
                     <input
@@ -302,7 +455,7 @@ export default function PublicBooking() {
                       className={`input-field ${formErrors.street ? 'border-red-400' : ''}`}
                       value={form.street}
                       onChange={e => { setForm(p => ({ ...p, street: e.target.value })); setFormErrors(p => ({ ...p, street: null })) }}
-                      placeholder="Musterstrasse 1"
+                      placeholder="Musterstraße 1"
                     />
                     {formErrors.street && <p className="text-red-500 text-xs mt-1">{formErrors.street}</p>}
                   </div>
@@ -338,7 +491,7 @@ export default function PublicBooking() {
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="w-full bg-blue-800 text-white py-3 rounded-xl font-semibold hover:bg-blue-900 transition-colors disabled:opacity-60"
+                    className="w-full bg-emerald-600 text-white py-3 rounded-xl font-semibold hover:bg-emerald-700 transition-all duration-200 shadow-sm hover:shadow-md disabled:opacity-60"
                   >
                     {submitting ? (
                       <span className="flex items-center justify-center gap-2">

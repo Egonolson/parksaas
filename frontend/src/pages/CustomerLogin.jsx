@@ -2,10 +2,10 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 
-export default function Login() {
+export default function CustomerLogin() {
   const [form, setForm] = useState({ email: '', password: '' })
   const [errors, setErrors] = useState({})
-  const { login, loading, error: authError } = useAuth()
+  const { customerLogin, loading, error: authError } = useAuth()
   const navigate = useNavigate()
 
   const validate = () => {
@@ -23,9 +23,9 @@ export default function Login() {
       setErrors(errs)
       return
     }
-    const result = await login(form.email, form.password)
+    const result = await customerLogin(form.email, form.password)
     if (result.success) {
-      navigate('/dashboard')
+      navigate('/kunde/dashboard')
     } else {
       setErrors({ general: result.error })
     }
@@ -51,8 +51,8 @@ export default function Login() {
             </div>
             <span className="text-emerald-800 font-bold text-2xl">ParkSaaS</span>
           </Link>
-          <h1 className="text-2xl font-bold text-gray-900 mt-6 mb-1">Willkommen zurück</h1>
-          <p className="text-gray-500 text-sm">Melden Sie sich in Ihrem Konto an</p>
+          <h1 className="text-2xl font-bold text-gray-900 mt-6 mb-1">Kundenportal</h1>
+          <p className="text-gray-500 text-sm">Melden Sie sich an, um Ihre Buchungen und Rechnungen einzusehen</p>
         </div>
 
         <div className="card p-8">
@@ -110,8 +110,8 @@ export default function Login() {
 
         <p className="text-center text-sm text-gray-500 mt-6">
           Noch kein Konto?{' '}
-          <Link to="/register" className="text-emerald-600 font-medium hover:underline">
-            Kostenlos registrieren
+          <Link to="/kunde/registrieren" className="text-emerald-600 font-medium hover:underline">
+            Jetzt registrieren
           </Link>
         </p>
       </div>

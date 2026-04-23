@@ -14,11 +14,11 @@
 
 @layer components {
   .btn-primary {
-    @apply bg-blue-800 text-white px-4 py-2 rounded-lg hover:bg-blue-900 transition-colors font-medium text-sm;
+    @apply bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-all duration-200 font-medium text-sm shadow-sm hover:shadow-md;
   }
 
   .btn-secondary {
-    @apply bg-white text-gray-700 px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors font-medium text-sm;
+    @apply bg-white text-gray-700 px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition-all duration-200 font-medium text-sm;
   }
 
   .btn-danger {
@@ -26,7 +26,7 @@
   }
 
   .input-field {
-    @apply w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent;
+    @apply w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500;
   }
 
   .label {
@@ -34,7 +34,7 @@
   }
 
   .card {
-    @apply bg-white rounded-xl border border-gray-200 shadow-sm;
+    @apply bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow duration-200;
   }
 
   .badge-active {
@@ -51,5 +51,11 @@
 
   .badge-failed {
     @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800;
+  }
+}
+
+@layer utilities {
+  .gradient-hero {
+    background: linear-gradient(135deg, #064e3b 0%, #059669 50%, #0891b2 100%);
   }
 }

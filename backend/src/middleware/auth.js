@@ -187,6 +187,84 @@ function authenticateAny(req, res, next) {
 }
 
 /**
+ * Middleware: authenticate as Customer.
+ *
+ * Expects a JWT signed with JWT_SECRET containing:
+ *   { sub: <customerId>, tenant_id: <tenantId>, email: <email>, role: 'customer' }
+ *
+ * Sets req.customer = { id, tenant_id, email, role }
+ */
+function authenticateCustomer(req, res, next) {
+  const token = extractBearerToken(req);
+
+  if (!token) {
+    return res.status(401).json({
+      error: 'Unauthorized',
+      message: 'Missing or malformed Authorization header.',
+    });
+  }
+
+  try {
+    const payload = jwt.verify(token, JWT_SECRET, {
+      algorithms: ['HS256'],
+    });
+
+    if (payload.role !== 'customer') {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Token does not grant customer access.',
+      });
+    }
+
+    req.customer = {
+      id: payload.sub,
+      tenant_id: payload.tenant_id,
+      email: payload.email,
+      role: payload.role,
+    };
+
+    logger.debug('Customer authenticated', { customerId: req.customer.id });
+    next();
+  } catch (err) {
+    logger.warn('Customer JWT verification failed', { error: err.message });
+
+    if (err.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        error: 'TokenExpired',
+        message: 'JWT has expired. Please log in again.',
+      });
+    }
+
+    return res.status(401).json({
+      error: 'Unauthorized',
+      message: 'Invalid JWT.',
+    });
+  }
+}
+
+/**
+ * Helper: generate a signed customer JWT.
+ * @param {object} customer - Customer row from DB (must have id, tenant_id, email)
+ * @param {string} [expiresIn]
+ * @returns {string}
+ */
+function signCustomerToken(customer, expiresIn) {
+  return jwt.sign(
+    {
+      sub: customer.id,
+      tenant_id: customer.tenant_id,
+      email: customer.email,
+      role: 'customer',
+    },
+    JWT_SECRET,
+    {
+      algorithm: 'HS256',
+      expiresIn: expiresIn || process.env.JWT_EXPIRES_IN || '24h',
+    }
+  );
+}
+
+/**
  * Helper: generate a signed operator JWT.
  * @param {object} tenant - Tenant row from DB
  * @param {string} [expiresIn]
@@ -233,8 +311,10 @@ function signPlatformAdminToken(admin, expiresIn) {
 module.exports = {
   authenticateOperator,
   authenticatePlatformAdmin,
+  authenticateCustomer,
   authenticateAny,
   signOperatorToken,
   signPlatformAdminToken,
+  signCustomerToken,
   extractBearerToken,
 };

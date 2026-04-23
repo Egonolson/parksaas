@@ -2,10 +2,10 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 
-export default function Login() {
+export default function AdminLogin() {
   const [form, setForm] = useState({ email: '', password: '' })
   const [errors, setErrors] = useState({})
-  const { login, loading, error: authError } = useAuth()
+  const { adminLogin, loading, error: authError } = useAuth()
   const navigate = useNavigate()
 
   const validate = () => {
@@ -23,9 +23,9 @@ export default function Login() {
       setErrors(errs)
       return
     }
-    const result = await login(form.email, form.password)
+    const result = await adminLogin(form.email, form.password)
     if (result.success) {
-      navigate('/dashboard')
+      navigate('/admin/dashboard')
     } else {
       setErrors({ general: result.error })
     }
@@ -51,8 +51,8 @@ export default function Login() {
             </div>
             <span className="text-emerald-800 font-bold text-2xl">ParkSaaS</span>
           </Link>
-          <h1 className="text-2xl font-bold text-gray-900 mt-6 mb-1">Willkommen zurück</h1>
-          <p className="text-gray-500 text-sm">Melden Sie sich in Ihrem Konto an</p>
+          <h1 className="text-2xl font-bold text-gray-900 mt-6 mb-1">Plattform Administration</h1>
+          <p className="text-gray-500 text-sm">Zugang nur für autorisierte Administratoren</p>
         </div>
 
         <div className="card p-8">
@@ -71,7 +71,7 @@ export default function Login() {
                 value={form.email}
                 onChange={handleChange}
                 className={`input-field ${errors.email ? 'border-red-400 focus:ring-red-400' : ''}`}
-                placeholder="max@example.de"
+                placeholder="admin@parksaas.de"
                 autoFocus
               />
               {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email}</p>}
@@ -108,10 +108,9 @@ export default function Login() {
           </form>
         </div>
 
-        <p className="text-center text-sm text-gray-500 mt-6">
-          Noch kein Konto?{' '}
-          <Link to="/register" className="text-emerald-600 font-medium hover:underline">
-            Kostenlos registrieren
+        <p className="text-center text-sm text-gray-400 mt-6">
+          <Link to="/" className="hover:text-gray-600 transition-colors">
+            ← Zurück zur Startseite
           </Link>
         </p>
       </div>

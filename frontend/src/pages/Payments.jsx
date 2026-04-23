@@ -1,17 +1,6 @@
 import { useState, useEffect } from 'react'
 import api from '../lib/api'
 
-const MOCK_PAYMENTS = [
-  { id: 1, customer_name: 'Max Mustermann', amount: 120, platform_fee: 3.60, status: 'paid', created_at: '2024-01-15', spot_number: 'A-01', method: 'SEPA' },
-  { id: 2, customer_name: 'Anna Schmidt', amount: 95, platform_fee: 2.85, status: 'paid', created_at: '2024-01-14', spot_number: 'B-05', method: 'iDEAL' },
-  { id: 3, customer_name: 'Tom Weber', amount: 150, platform_fee: 4.50, status: 'pending', created_at: '2024-01-13', spot_number: 'A-12', method: 'SEPA' },
-  { id: 4, customer_name: 'Lisa Bauer', amount: 120, platform_fee: 3.60, status: 'paid', created_at: '2024-01-12', spot_number: 'C-03', method: 'Kreditkarte' },
-  { id: 5, customer_name: 'Klaus Hoffmann', amount: 80, platform_fee: 2.40, status: 'failed', created_at: '2024-01-10', spot_number: 'A-07', method: 'SEPA' },
-  { id: 6, customer_name: 'Maria Meier', amount: 110, platform_fee: 3.30, status: 'paid', created_at: '2023-12-15', spot_number: 'B-02', method: 'PayPal' },
-  { id: 7, customer_name: 'Frank Schulz', amount: 135, platform_fee: 4.05, status: 'paid', created_at: '2023-12-14', spot_number: 'A-04', method: 'Kreditkarte' },
-  { id: 8, customer_name: 'Sandra Koch', amount: 90, platform_fee: 2.70, status: 'paid', created_at: '2023-12-01', spot_number: 'D-01', method: 'SEPA' },
-]
-
 const STATUS_BADGE = {
   paid: <span className="badge-active">Bezahlt</span>,
   pending: <span className="badge-pending">Ausstehend</span>,
@@ -28,7 +17,7 @@ export default function Payments() {
   useEffect(() => {
     api.get('/payments')
       .then(res => setPayments(res.data.payments || res.data))
-      .catch(() => setPayments(MOCK_PAYMENTS))
+      .catch(() => setPayments([]))
       .finally(() => setLoading(false))
   }, [])
 
@@ -53,7 +42,7 @@ export default function Payments() {
     <div>
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Zahlungen</h1>
-        <p className="text-gray-500 text-sm mt-1">Alle Transaktionen via Mollie</p>
+        <p className="text-gray-500 text-sm mt-1">Alle Transaktionen im Überblick</p>
       </div>
 
       {/* Summary cards */}
@@ -65,7 +54,7 @@ export default function Payments() {
         </div>
         <div className="card p-4">
           <p className="text-xs font-medium text-gray-500 uppercase mb-1">Plattform-Fees</p>
-          <p className="text-2xl font-bold text-blue-700">{formatCurrency(totalFees)}</p>
+          <p className="text-2xl font-bold text-emerald-600">{formatCurrency(totalFees)}</p>
           <p className="text-xs text-gray-400 mt-0.5">ParkSaaS-Provision</p>
         </div>
         <div className="card p-4">
@@ -93,7 +82,7 @@ export default function Payments() {
           </select>
           {monthFilter && (
             <button onClick={() => setMonthFilter('')} className="text-gray-400 hover:text-gray-600 text-sm">
-              Filter zuruecksetzen
+              Filter zurücksetzen
             </button>
           )}
         </div>

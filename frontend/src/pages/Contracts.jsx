@@ -2,19 +2,11 @@ import { useState, useEffect } from 'react'
 import api from '../lib/api'
 import Modal from '../components/Modal'
 
-const MOCK_CONTRACTS = [
-  { id: 1, customer_name: 'Max Mustermann', customer_email: 'max@example.de', spot_number: 'A-01', location_name: 'Parkhaus Nord', status: 'active', monthly_amount: 120, started_at: '2024-01-01', phone: '+49 170 1234567', address: 'Musterweg 1, 20095 Hamburg', license_plate: 'HH-MM 123' },
-  { id: 2, customer_name: 'Anna Schmidt', customer_email: 'anna@example.de', spot_number: 'B-05', location_name: 'Parkhaus Nord', status: 'active', monthly_amount: 95, started_at: '2023-11-15', phone: '+49 171 9876543', address: 'Schmidtstr. 5, 20097 Hamburg', license_plate: 'HH-AS 456' },
-  { id: 3, customer_name: 'Tom Weber', customer_email: 'tom@example.de', spot_number: 'A-12', location_name: 'Parkplatz Sued', status: 'pending', monthly_amount: 150, started_at: '2024-01-10', phone: '+49 172 5552233', address: 'Weberweg 3, 22305 Hamburg', license_plate: 'HH-TW 789' },
-  { id: 4, customer_name: 'Lisa Bauer', customer_email: 'lisa@example.de', spot_number: 'C-03', location_name: 'Parkhaus Nord', status: 'active', monthly_amount: 120, started_at: '2023-09-01', phone: '+49 173 4441122', address: 'Bauerstr. 8, 20099 Hamburg', license_plate: 'HH-LB 321' },
-  { id: 5, customer_name: 'Klaus Hoffmann', customer_email: 'klaus@example.de', spot_number: 'A-07', location_name: 'Tiefgarage West', status: 'inactive', monthly_amount: 80, started_at: '2023-06-15', phone: '+49 174 7778899', address: 'Hoffmanngasse 12, 22305 Hamburg', license_plate: 'HH-KH 654' },
-]
-
 const STATUS_CONFIG = {
   active: { label: 'Aktiv', className: 'badge-active' },
   pending: { label: 'Ausstehend', className: 'badge-pending' },
   inactive: { label: 'Inaktiv', className: 'badge-inactive' },
-  cancelled: { label: 'Gekuendigt', className: 'badge-failed' },
+  cancelled: { label: 'Gekündigt', className: 'badge-failed' },
 }
 
 export default function Contracts() {
@@ -26,7 +18,7 @@ export default function Contracts() {
   useEffect(() => {
     api.get('/contracts')
       .then(res => setContracts(res.data.contracts || res.data))
-      .catch(() => setContracts(MOCK_CONTRACTS))
+      .catch(() => setContracts([]))
       .finally(() => setLoading(false))
   }, [])
 
@@ -48,8 +40,8 @@ export default function Contracts() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Vertraege</h1>
-          <p className="text-gray-500 text-sm mt-1">{activeCount} aktive Mietverhaeltnisse</p>
+          <h1 className="text-2xl font-bold text-gray-900">Verträge</h1>
+          <p className="text-gray-500 text-sm mt-1">{activeCount} aktive Mietverhältnisse</p>
         </div>
       </div>
 
@@ -89,7 +81,7 @@ export default function Contracts() {
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="text-center py-10 text-gray-400">Keine Vertraege gefunden</td>
+                  <td colSpan={6} className="text-center py-10 text-gray-400">Keine Verträge gefunden</td>
                 </tr>
               ) : filtered.map(contract => {
                 const statusCfg = STATUS_CONFIG[contract.status] || STATUS_CONFIG.inactive
@@ -115,7 +107,7 @@ export default function Contracts() {
                     <td className="px-4 py-3.5">
                       <button
                         onClick={() => setSelectedContract(contract)}
-                        className="text-blue-700 hover:text-blue-900 text-xs font-medium hover:underline"
+                        className="text-emerald-600 hover:text-emerald-700 text-xs font-medium hover:underline"
                       >
                         Details
                       </button>
@@ -138,8 +130,8 @@ export default function Contracts() {
         {selectedContract && (
           <div className="space-y-5">
             <div className="flex items-center gap-3 pb-4 border-b border-gray-100">
-              <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
-                <span className="text-blue-800 font-bold text-lg">
+              <div className="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center">
+                <span className="text-emerald-700 font-bold text-lg">
                   {selectedContract.customer_name?.[0]?.toUpperCase()}
                 </span>
               </div>
@@ -185,7 +177,7 @@ export default function Contracts() {
             </div>
 
             <div className="flex gap-3 pt-2 border-t border-gray-100">
-              <button onClick={() => setSelectedContract(null)} className="btn-secondary flex-1">Schliessen</button>
+              <button onClick={() => setSelectedContract(null)} className="btn-secondary flex-1">Schließen</button>
             </div>
           </div>
         )}

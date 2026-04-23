@@ -4,12 +4,6 @@ import Modal from '../components/Modal'
 
 const EMPTY_FORM = { name: '', address: '', zip: '', city: '' }
 
-const MOCK_LOCATIONS = [
-  { id: 1, name: 'Parkhaus Nord', address: 'Nordstrasse 12', zip: '20097', city: 'Hamburg', spot_count: 24, available_spots: 8 },
-  { id: 2, name: 'Parkplatz Sued', address: 'Suedalle 5', zip: '20099', city: 'Hamburg', spot_count: 12, available_spots: 3 },
-  { id: 3, name: 'Tiefgarage West', address: 'Westweg 99', zip: '22305', city: 'Hamburg', spot_count: 50, available_spots: 20 },
-]
-
 export default function Locations() {
   const [locations, setLocations] = useState([])
   const [loading, setLoading] = useState(true)
@@ -29,7 +23,7 @@ export default function Locations() {
       const res = await api.get('/locations')
       setLocations(res.data.locations || res.data)
     } catch {
-      setLocations(MOCK_LOCATIONS)
+      setLocations([])
     } finally {
       setLoading(false)
     }
@@ -84,7 +78,7 @@ export default function Locations() {
       await api.delete(`/locations/${id}`)
       setLocations(prev => prev.filter(l => l.id !== id))
     } catch {
-      alert('Fehler beim Loeschen')
+      alert('Fehler beim Löschen')
     }
     setDeleteConfirm(null)
   }
@@ -120,15 +114,15 @@ export default function Locations() {
           {locations.map(loc => (
             <div key={loc.id} className="card p-5 hover:shadow-md transition-shadow">
               <div className="flex items-start justify-between mb-3">
-                <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center shrink-0">
-                  <svg className="w-5 h-5 text-blue-800" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center shrink-0">
+                  <svg className="w-5 h-5 text-emerald-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
                   </svg>
                 </div>
                 <div className="flex gap-1">
                   <button
                     onClick={() => openEdit(loc)}
-                    className="p-1.5 text-gray-400 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
+                    className="p-1.5 text-gray-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -154,7 +148,7 @@ export default function Locations() {
                 </div>
                 <div className="text-center">
                   <p className="text-lg font-bold text-green-600">{loc.available_spots || 0}</p>
-                  <p className="text-xs text-gray-400">Verfuegbar</p>
+                  <p className="text-xs text-gray-400">Verfügbar</p>
                 </div>
                 <div className="text-center">
                   <p className="text-lg font-bold text-red-500">{(loc.spot_count || 0) - (loc.available_spots || 0)}</p>
@@ -194,7 +188,7 @@ export default function Locations() {
               className={`input-field ${formErrors.address ? 'border-red-400' : ''}`}
               value={form.address}
               onChange={e => setForm(p => ({ ...p, address: e.target.value }))}
-              placeholder="Musterstrasse 1"
+              placeholder="Musterstraße 1"
             />
             {formErrors.address && <p className="text-red-500 text-xs mt-1">{formErrors.address}</p>}
           </div>
@@ -234,16 +228,16 @@ export default function Locations() {
       <Modal
         isOpen={!!deleteConfirm}
         onClose={() => setDeleteConfirm(null)}
-        title="Standort loeschen"
+        title="Standort löschen"
         size="sm"
       >
         <p className="text-gray-600 text-sm mb-5">
-          Moechten Sie <strong>{deleteConfirm?.name}</strong> wirklich loeschen?
-          Alle zugehoerigen Stellplaetze werden ebenfalls geloescht.
+          Möchten Sie <strong>{deleteConfirm?.name}</strong> wirklich löschen?
+          Alle zugehörigen Stellplätze werden ebenfalls gelöscht.
         </p>
         <div className="flex gap-3">
           <button onClick={() => setDeleteConfirm(null)} className="btn-secondary flex-1">Abbrechen</button>
-          <button onClick={() => handleDelete(deleteConfirm.id)} className="btn-danger flex-1">Loeschen</button>
+          <button onClick={() => handleDelete(deleteConfirm.id)} className="btn-danger flex-1">Löschen</button>
         </div>
       </Modal>
     </div>

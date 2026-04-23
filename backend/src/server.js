@@ -87,6 +87,9 @@ const contractRoutes = require('./routes/contracts');
 const paymentRoutes = require('./routes/payments');
 const webhookRoutes = require('./routes/webhooks');
 const platformRoutes = require('./routes/platform');
+const compatRoutes = require('./routes/compat');
+const customerAuthRoutes = require('./routes/customerAuth');
+const customerPortalRoutes = require('./routes/customerPortal');
 
 // =============================================================================
 // EXPRESS APP SETUP
@@ -203,7 +206,7 @@ function buildApp() {
   // Stricter limiter for auth endpoints
   const authLimiter = rateLimit({
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
-    max: parseInt(process.env.AUTH_RATE_LIMIT_MAX || '20', 10),
+    max: parseInt(process.env.AUTH_RATE_LIMIT_MAX || '100', 10),
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => req.ip,
@@ -244,7 +247,25 @@ function buildApp() {
   });
 
   app.get('/api/v1/health', async (req, res) => {
-    res.redirect('/health');
+    try {
+      await db.query('SELECT 1');
+      res.json({
+        status: 'ok',
+        service: 'parksaas-api',
+        version: process.env.npm_package_version || '1.0.0',
+        environment: process.env.NODE_ENV || 'development',
+        timestamp: new Date().toISOString(),
+        requestId: req.id,
+      });
+    } catch (err) {
+      logger.error('Health check DB query failed', { error: err.message });
+      res.status(503).json({
+        status: 'error',
+        service: 'parksaas-api',
+        message: 'Database connection failed',
+        timestamp: new Date().toISOString(),
+      });
+    }
   });
 
   // ---------------------------------------------------------------------------
@@ -259,11 +280,20 @@ function buildApp() {
   // Auth (public)
   app.use(`${API_PREFIX}/auth`, authRoutes);
 
+  // Customer auth (public)
+  app.use(`${API_PREFIX}/auth/customer`, customerAuthRoutes);
+
+  // Customer portal (customer JWT required)
+  app.use(`${API_PREFIX}/customer`, customerPortalRoutes);
+
   // Webhook endpoints (no auth, but verified via Mollie signature in handlers)
   app.use(`${API_PREFIX}/webhooks`, webhookRoutes);
 
   // Platform admin routes
   app.use(`${API_PREFIX}/platform`, platformRoutes);
+
+  // Compatibility routes (old frontend paths mapped to new backend)
+  app.use(`${API_PREFIX}`, compatRoutes);
 
   // Tenant-scoped operator routes
   // Pattern: /api/v1/tenants/:tenantSlug/<resource>

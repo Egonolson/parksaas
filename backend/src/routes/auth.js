@@ -16,6 +16,12 @@ const router = express.Router();
 router.post(
   '/register',
   [
+    (req, _res, next) => {
+      if (!req.body?.name && req.body?.company_name) {
+        req.body.name = req.body.company_name;
+      }
+      next();
+    },
     body('name').trim().isLength({ min: 2, max: 255 }).withMessage('Name must be 2-255 characters'),
     body('slug')
       .trim()
@@ -36,13 +42,21 @@ router.post(
       }
 
       const { name, slug, email, password } = req.body;
+      let { plan } = req.body;
+
+      // Only accept 'professional' or 'enterprise' plans
+      const validPlans = ['professional', 'enterprise'];
+      if (!plan || !validPlans.includes(plan)) {
+        plan = 'professional';
+      }
+
       const password_hash = await bcrypt.hash(password, 12);
 
       const result = await db.query(
-        `INSERT INTO tenants (name, slug, email, password_hash)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO tenants (name, slug, email, password_hash, plan)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING id, name, slug, email, plan, created_at`,
-        [name, slug, email, password_hash]
+        [name, slug, email, password_hash, plan]
       );
 
       const tenant = result.rows[0];
