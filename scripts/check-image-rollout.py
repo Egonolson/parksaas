@@ -3,9 +3,11 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
+import stat
 import sys
 
 
@@ -141,7 +143,7 @@ def runtime_hardening(container):
             "Memory": int(config.get("Memory") or 0), "PidsLimit": int(config.get("PidsLimit") or 0)}
 
 
-def runtime_state(payload, policy, config, post=False, candidate_file=None):
+def runtime_state(payload, policy, config, post=False, candidate_file=None, runtime_base_file=None):
     require(config.get("name") == policy["project"], "Compose project mismatch")
     require(set(config.get("services", {})) == set(policy["services"]), "Compose service set mismatch")
     require(not post or (candidate_file and Path(candidate_file).is_absolute()), "postcheck requires absolute candidate file")
@@ -172,6 +174,7 @@ def runtime_state(payload, policy, config, post=False, candidate_file=None):
         require(labels.get("com.docker.compose.project.working_dir") == policy["project_dir"], "Compose directory drift")
         files = [policy["config_file"]]
         if post and service in policy["targets"]:
+            files = [runtime_base_file or policy["config_file"]]
             files.append(candidate_file)
         require(sorted(labels.get("com.docker.compose.project.config_files", "").split(",")) == sorted(files),
                 "Compose file provenance drift")
@@ -226,8 +229,9 @@ def runtime_state(payload, policy, config, post=False, candidate_file=None):
 
 def freeze(payload, policy):
     state, images = runtime_state(payload, policy, payload["before"])
-    frozen = {"format": 2, "policy_sha256": digest(policy), "config_sha256": digest(payload["before"]),
+    frozen = {"format": 3, "policy_sha256": digest(policy), "config_sha256": digest(payload["before"]),
             "runtime_sha256": digest(state),
+            "runtime_files": copy.deepcopy(payload.get("runtime_files")),
             "rollback_images": {service: images[service] for service in policy["targets"]},
             "target_containers": {container["Config"]["Labels"]["com.docker.compose.service"]:
                 {"id": container["Id"], "started": container["State"].get("StartedAt"),
@@ -242,7 +246,23 @@ def freeze(payload, policy):
 
 
 def check(payload, policy, frozen, post=False, candidate_file=None, rollback=False):
-    require(frozen.get("format") == 2 and frozen.get("policy_sha256") == digest(policy), "frozen policy mismatch")
+    require(frozen.get("format") == 3 and frozen.get("policy_sha256") == digest(policy), "frozen policy mismatch")
+    files = payload.get("runtime_files")
+    require(files == frozen.get("runtime_files"), "frozen runtime file path or hash drift")
+    if files is not None:
+        require(set(files) == {"base_file", "env_file", "candidate_file", "base_sha256", "env_sha256"},
+                "complete runtime file identity required")
+        for key in ("base_file", "candidate_file", "env_file"):
+            require((key == "env_file" and files[key] is None) or
+                    (isinstance(files[key], str) and Path(files[key]).is_absolute()), "absolute runtime files required")
+        for key in ("base_sha256", "env_sha256"):
+            require((key == "env_sha256" and files["env_file"] is None and files[key] is None) or
+                    (isinstance(files[key], str) and re.fullmatch(r"[0-9a-f]{64}", files[key])), "runtime file digest required")
+        if candidate_file is not None or post or rollback:
+            require(candidate_file == files["candidate_file"], "frozen candidate file path changed")
+        if not post and not rollback:
+            require(payload.get("original_files") == {key: files[key] for key in ("base_sha256", "env_sha256")},
+                    "original files drifted before first cutover")
     require(frozen.get("config_sha256") == digest(payload["before"]), "frozen base config drift")
     before, after = copy.deepcopy(payload["before"]), copy.deepcopy(payload["after"])
     require(after.get("name") == policy["project"], "candidate project mismatch")
@@ -271,7 +291,8 @@ def check(payload, policy, frozen, post=False, candidate_file=None, rollback=Fal
             after["services"][service].pop(key, None)
     require(before == after, "candidate changes more than selected images")
     config = payload["after"] if post else payload["before"]
-    state, current_images = runtime_state(payload, policy, config, post or rollback, candidate_file)
+    state, current_images = runtime_state(payload, policy, config, post or rollback, candidate_file,
+                                          files["base_file"] if files else None)
     require(digest(state) == frozen.get("runtime_sha256"), "frozen runtime or untouched service changed")
     if not post and not rollback:
         for container in payload["containers"]:
@@ -299,10 +320,45 @@ def read_json(command):
     return json.loads(result.stdout)
 
 
-def collect(policy, candidate_file, required_images=()):
+def file_digest(path, protected=False):
+    require(path and Path(path).is_absolute(), "absolute runtime file required")
+    require(not Path(path).is_symlink(), "regular runtime file required")
+    # Do not follow a link swapped between validation/open, or block on a FIFO.
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        require(stat.S_ISREG(metadata.st_mode) and not Path(path).is_symlink(), "regular runtime file required")
+        if protected:
+            require(metadata.st_uid == os.geteuid() and not metadata.st_mode & 0o077, "private operator-owned snapshot required")
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def runtime_file_metadata(policy, candidate_file, runtime_base_file, runtime_env_file, check_original):
+    if not runtime_base_file and not runtime_env_file:
+        return None, None
+    base_file = runtime_base_file or policy["config_file"]
+    require(not runtime_base_file or runtime_base_file != policy["config_file"], "snapshot must not be original base")
+    original_env = str(Path(policy["project_dir"]) / ".env")
+    require(not runtime_env_file or runtime_env_file != original_env, "snapshot must not be original environment")
+    files = {"base_file": base_file, "env_file": runtime_env_file, "candidate_file": candidate_file,
+             "base_sha256": file_digest(base_file, bool(runtime_base_file)),
+             "env_sha256": file_digest(runtime_env_file, True) if runtime_env_file else None}
+    original = None
+    if check_original:
+        original = {"base_sha256": file_digest(policy["config_file"]),
+                    "env_sha256": file_digest(original_env) if runtime_env_file else None}
+        require(original == {key: files[key] for key in ("base_sha256", "env_sha256")},
+                "original files differ from snapshots")
+    return files, original
+
+
+def collect(policy, candidate_file, required_images=(), runtime_base_file=None, runtime_env_file=None, check_original=True):
     require(candidate_file and Path(candidate_file).is_absolute(), "absolute candidate file required")
+    files, original = runtime_file_metadata(policy, candidate_file, runtime_base_file, runtime_env_file, check_original)
     base = ["docker", "compose", "-p", policy["project"], "--project-directory",
-            policy["project_dir"], "-f", policy["config_file"]]
+            policy["project_dir"]]
+    if runtime_env_file:
+        base += ["--env-file", runtime_env_file]
+    base += ["-f", runtime_base_file or policy["config_file"]]
     before = read_json(base + ["config", "--format", "json"])
     after = read_json(base + ["-f", candidate_file, "config", "--format", "json"])
     result = subprocess.run(["docker", "ps", "-aq", "--filter",
@@ -320,7 +376,12 @@ def collect(policy, candidate_file, required_images=()):
         require(re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is not None, "local candidate image ID required")
         image_ids.add(image_id)
     images = read_json(["docker", "image", "inspect", *sorted(image_ids)])
-    return {"before": before, "after": after, "containers": containers, "images": images}
+    require((files, original) == runtime_file_metadata(policy, candidate_file, runtime_base_file, runtime_env_file, check_original),
+            "runtime files changed during metadata collection")
+    payload = {"before": before, "after": after, "containers": containers, "images": images}
+    if files is not None:
+        payload.update(runtime_files=files, original_files=original)
+    return payload
 
 
 def main():
@@ -332,6 +393,8 @@ def main():
     parser.add_argument("--post", action="store_true")
     parser.add_argument("--rollback", action="store_true")
     parser.add_argument("--candidate-file")
+    parser.add_argument("--runtime-base-file", help="absolute private frozen Compose base; project directory stays original")
+    parser.add_argument("--runtime-env-file", help="absolute private frozen copy of the original project .env")
     parser.add_argument("--live", action="store_true", help="explicitly collect read-only local Docker metadata")
     args = parser.parse_args()
     try:
@@ -339,7 +402,9 @@ def main():
         frozen = json.loads(Path(args.frozen).read_text()) if args.frozen else None
         required_images = list((frozen or {}).get("rollback_images", {}).values())
         required_images += list((frozen or {}).get("candidate_images", {}).values())
-        payload = collect(policy, args.candidate_file, required_images) if args.live else json.load(sys.stdin)
+        require(args.live or not (args.runtime_base_file or args.runtime_env_file), "runtime file options require explicit live collection")
+        payload = collect(policy, args.candidate_file, required_images, args.runtime_base_file, args.runtime_env_file,
+                          not args.post and not args.rollback) if args.live else json.load(sys.stdin)
         if args.freeze:
             require(not args.post and not args.frozen and not args.rollback, "freeze cannot be combined with check")
             result = freeze(payload, policy)

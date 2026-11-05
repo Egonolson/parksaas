@@ -57,6 +57,154 @@ def fixture(environment="qa"):
 
 
 class ImageRolloutTests(unittest.TestCase):
+    def snapshot_fixture(self):
+        payload, policy = fixture()
+        payload["runtime_files"] = {"base_file": "/checkpoint/base.compose.yml", "env_file": "/checkpoint/runtime.env",
+            "candidate_file": "/checkpoint/images.compose.yaml", "base_sha256": "a" * 64, "env_sha256": "b" * 64}
+        payload["original_files"] = {"base_sha256": "a" * 64, "env_sha256": "b" * 64}
+        return payload, policy
+
+    def test_frozen_file_paths_hashes_and_overlay_cannot_change(self):
+        for key in ["base_file", "env_file", "candidate_file", "base_sha256", "env_sha256"]:
+            with self.subTest(key=key):
+                payload, policy = self.snapshot_fixture()
+                frozen = guard.freeze(payload, policy)
+                payload["runtime_files"][key] += "-changed"
+                self.assert_blocked(payload, policy, frozen)
+
+    def test_original_file_drift_stops_initial_freeze_and_forward_preflight(self):
+        for key in ["base_sha256", "env_sha256"]:
+            with self.subTest(key=key):
+                payload, policy = self.snapshot_fixture()
+                frozen = guard.freeze(payload, policy)
+                payload["original_files"][key] = "c" * 64
+                self.assert_blocked(payload, policy)
+                self.assert_blocked(payload, policy, frozen)
+
+    def test_snapshot_provenance_is_required_after_swap_and_for_rollback(self):
+        payload, policy = self.snapshot_fixture()
+        labels = payload["containers"][0]["Config"]["Labels"]
+        labels["com.docker.compose.project.config_files"] = payload["runtime_files"]["base_file"]
+        self.assert_blocked(payload, policy)
+        labels["com.docker.compose.project.config_files"] = policy["config_file"]
+        frozen = guard.freeze(payload, policy)
+        overlay = self.forward(payload, policy, payload["runtime_files"]["candidate_file"])
+        # The operator's original files may change after a failed cutover. The
+        # rollback still resolves ONLY the immutable checkpoint files.
+        payload.pop("original_files")
+        for container in payload["containers"]:
+            if container["Config"]["Labels"]["com.docker.compose.service"] in policy["targets"]:
+                container["Config"]["Labels"]["com.docker.compose.project.config_files"] = payload["runtime_files"]["base_file"] + "," + overlay
+        self.assertTrue(guard.check(payload, policy, frozen, post=True, candidate_file=overlay)["ok"])
+        self.assert_blocked(payload, policy, frozen, post=True, candidate_file="/different/overlay.yaml")
+        for service in policy["targets"]:
+            payload["after"]["services"][service]["image"] = frozen["rollback_images"][service]
+        self.assertTrue(guard.check(payload, policy, frozen, rollback=True, candidate_file=overlay)["ok"])
+        for container in payload["containers"]:
+            service = container["Config"]["Labels"]["com.docker.compose.service"]
+            if service in policy["targets"]:
+                container["Image"] = frozen["rollback_images"][service]
+                container["Config"]["Env"][-1] = "NODE_VERSION=old"
+        self.assertTrue(guard.check(payload, policy, frozen, post=True, rollback=True, candidate_file=overlay)["ok"])
+        payload["containers"][0]["Config"]["Labels"]["com.docker.compose.project.config_files"] = policy["config_file"] + "," + overlay
+        self.assert_blocked(payload, policy, frozen, post=True, rollback=True, candidate_file=overlay)
+
+    def test_snapshot_cli_uses_same_private_files_after_originals_are_missing(self):
+        payload, policy = fixture()
+        with tempfile.TemporaryDirectory(prefix="rollout-private-fixture-") as directory:
+            root = Path(directory)
+            original, checkpoint = root / "original", root / "checkpoint"
+            original.mkdir(mode=0o700)
+            checkpoint.mkdir(mode=0o700)
+            policy.update(project_dir=str(original), config_file=str(original / "base.yml"))
+            for name, content in [("base.yml", "services: {}\n"), (".env", "FIXTURE_MODE=fixture-only\n")]:
+                for folder in [original, checkpoint]:
+                    path = folder / name
+                    path.write_text(content)
+                    path.chmod(0o600)
+            for container in payload["containers"]:
+                container["Config"]["Labels"].update({"com.docker.compose.project.working_dir": str(original),
+                    "com.docker.compose.project.config_files": policy["config_file"]})
+            overlay, base, env = map(str, [checkpoint / "images.yml", checkpoint / "base.yml", checkpoint / ".env"])
+            commands = []
+
+            def metadata(command):
+                commands.append(command)
+                if command[:2] == ["docker", "compose"]:
+                    self.assertEqual(command[command.index("--project-directory") + 1], str(original))
+                    self.assertEqual(command[command.index("--env-file") + 1], env)
+                    self.assertEqual(command[command.index("-f") + 1], base)
+                    return payload["after"] if overlay in command else payload["before"]
+                if command[:2] == ["docker", "inspect"]:
+                    self.assertEqual(set(command[2:]), {container["Id"] for container in payload["containers"]})
+                    return payload["containers"]
+                self.assertEqual(command[:3], ["docker", "image", "inspect"])
+                return [image for image in payload["images"] if image["Id"] in command[3:]]
+
+            def listing(command, **options):
+                return subprocess.CompletedProcess(command, 0, "\n".join(container["Id"] for container in payload["containers"]))
+
+            with mock.patch.object(guard, "read_json", side_effect=metadata), \
+                 mock.patch.object(guard.subprocess, "run", side_effect=listing):
+                collected = guard.collect(policy, overlay, runtime_base_file=base, runtime_env_file=env)
+                frozen = guard.freeze(collected, policy)
+                (original / "base.yml").write_text("changed original\n")
+                with self.assertRaises(guard.RolloutError):
+                    guard.collect(policy, overlay, runtime_base_file=base, runtime_env_file=env)
+                (original / "base.yml").unlink()
+                (original / ".env").unlink()
+                self.forward(payload, policy, overlay)
+                for container in payload["containers"]:
+                    if container["Config"]["Labels"]["com.docker.compose.service"] in policy["targets"]:
+                        container["Config"]["Labels"]["com.docker.compose.project.config_files"] = base + "," + overlay
+                profiles_path, frozen_path = root / "profiles.json", root / "frozen.json"
+                profiles_path.write_text(json.dumps({"qa": policy}))
+                frozen_path.write_text(json.dumps(frozen))
+                argv = ["guard", "--profiles", str(profiles_path), "--environment", "qa", "--live", "--post",
+                        "--candidate-file", overlay, "--runtime-base-file", base, "--runtime-env-file", env,
+                        "--frozen", str(frozen_path)]
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    self.assertEqual(guard.main(), 0, stderr.getvalue())
+                self.assertTrue(json.loads(stdout.getvalue())["ok"])
+                self.assertNotIn("fixture-only", stdout.getvalue() + stderr.getvalue())
+                for service in policy["targets"]:
+                    payload["after"]["services"][service]["image"] = frozen["rollback_images"][service]
+                argv.remove("--post")
+                argv.append("--rollback")
+                with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(guard.main(), 0)
+                for container in payload["containers"]:
+                    service = container["Config"]["Labels"]["com.docker.compose.service"]
+                    if service in policy["targets"]:
+                        container["Id"] += "-rollback"
+                        container["Image"] = frozen["rollback_images"][service]
+                        container["Config"]["Env"][-1] = "NODE_VERSION=old"
+                argv.append("--post")
+                with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(guard.main(), 0)
+                self.assertEqual((checkpoint / "base.yml").read_text(), "services: {}\n")
+                self.assertEqual((checkpoint / ".env").read_text(), "FIXTURE_MODE=fixture-only\n")
+                self.assertFalse((original / "base.yml").exists())
+                self.assertFalse((original / ".env").exists())
+
+    def test_runtime_snapshot_requires_private_regular_absolute_files(self):
+        with tempfile.TemporaryDirectory(prefix="rollout-private-fixture-") as directory:
+            path = Path(directory) / "fixture.env"
+            path.write_text("FIXTURE_MODE=fixture-only\n")
+            path.chmod(0o600)
+            self.assertEqual(guard.file_digest(str(path), True), hashlib.sha256(path.read_bytes()).hexdigest())
+            path.chmod(0o644)
+            with self.assertRaises(guard.RolloutError):
+                guard.file_digest(str(path), True)
+            path.chmod(0o600)
+            link = Path(directory) / "link.env"
+            link.symlink_to(path)
+            with self.assertRaises(guard.RolloutError):
+                guard.file_digest(str(link), True)
+            with self.assertRaises(guard.RolloutError):
+                guard.file_digest("relative.env", True)
+
     def forward(self, payload, policy, overlay="/fixture/images.compose.yaml"):
         for container in payload["containers"]:
             service = container["Config"]["Labels"]["com.docker.compose.service"]

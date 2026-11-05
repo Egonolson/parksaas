@@ -1,6 +1,6 @@
 # Kontrollierter Imagewechsel QA → Produktion
 
-Dieser Ablauf ist vorbereitet, nicht ausgeführt. Root führt sämtliche Serveraktionen aus. Der Guard erteilt keine Betriebsfreigabe. Die bestehenden serverlokalen Compose-Dateien bleiben die Basis; Repo-Defaults werden nicht synchronisiert.
+Dieser Ablauf ist vorbereitet, nicht ausgeführt. Root führt sämtliche Serveraktionen aus. Der Guard erteilt keine Betriebsfreigabe. Die geschützten bytegleichen Snapshots der bestehenden serverlokalen Compose-/ENV-Dateien bilden die ausführbare Basis; Repo-Defaults werden nicht synchronisiert.
 
 ## Verbindliche Voraussetzungen
 
@@ -26,7 +26,7 @@ Vorher die **tatsächlich laufenden** alten Zielimage-IDs samt Architektur siche
 
 ## Gefrorener Plan und Preflight
 
-Root legt die geprüften Rolloutdateien in einem geschützten Releaseverzeichnis ab (`umask 077`) und setzt die unten benannten Imagevariablen auf vollständige lokal geprüfte `sha256:<64 hex>`-Image-IDs. Die Dateipfade/Projektkennung aus dem gewählten Profil müssen zur frischen Runtime passen. Der Kandidatenoverlay bleibt für Vorwärts- und Rückweg unter demselben absoluten Pfad.
+Root legt die geprüften Rolloutdateien sowie bytegleiche Snapshots der vorhandenen Serverbasis und `<project_dir>/.env` in einem geschützten Releaseverzeichnis ab (`umask 077`) und setzt die unten benannten Imagevariablen auf vollständige lokal geprüfte `sha256:<64 hex>`-Image-IDs. Die Dateipfade/Projektkennung aus dem gewählten Profil müssen zur frischen Runtime passen. Basis-Snapshot, ENV-Snapshot und Kandidatenoverlay bleiben für sämtliche Prüfungen, Vorwärts- und Rückwege unter denselben absoluten Pfaden. Die ursprünglichen Basis-/ENV-Dateien werden niemals überschrieben. Snapshots müssen reguläre, nicht symbolisch verlinkte, dem ausführenden Operator gehörende Dateien ohne Gruppen-/Fremdrechte sein; geschützt ablegen und unveränderlich behandeln.
 
 Schema des ausschließlich durch Root auszuführenden Prüfaufrufs:
 
@@ -34,10 +34,14 @@ Schema des ausschließlich durch Root auszuführenden Prüfaufrufs:
 python3 -B scripts/check-image-rollout.py \
   --profiles deploy/image-rollout/profiles.json --environment qa \
   --live --candidate-file /ABSOLUTES-RELEASEVERZEICHNIS/images.compose.yaml \
+  --runtime-base-file /GESCHUETZTER-CHECKPOINT/base.compose.yml \
+  --runtime-env-file /GESCHUETZTER-CHECKPOINT/runtime.env \
   --freeze > /GESCHUETZTES-VERZEICHNIS/frozen-qa.json
 ```
 
-Nur nach erfolgreicher Prüfung und privater Operatorbewertung den Freeze beibehalten. Er enthält ausschließlich Hashes sowie Ziel-/Rückweg-Image-IDs und Zielcontainer-Identitäten, keine Umgebungswerte. `--live` löst serverlokale Konfiguration einschließlich env_file nur im Prozessspeicher auf und protokolliert keine Werte. Keine unredigierte `compose config`-/`docker inspect`-Ausgabe speichern, kein `set -x`, kein `tee` für diese Eingaben.
+Nur nach erfolgreicher Prüfung und privater Operatorbewertung den Freeze beibehalten. Er enthält ausschließlich Hashes, gebundene Dateipfade sowie Ziel-/Rückweg-Image-IDs und Zielcontainer-Identitäten, keine Umgebungswerte. `--live` löst serverlokale Konfiguration einschließlich env_file nur im Prozessspeicher auf und protokolliert keine Werte. Keine unredigierte `compose config`-/`docker inspect`-Ausgabe speichern, kein `set -x`, kein `tee` für diese Eingaben.
+
+Vor Freeze und unmittelbar vor dem ersten Cutover müssen Originalbasis und ursprüngliche `<project_dir>/.env` noch bytegleich zu ihren Snapshots sein; jede Originaldrift stoppt. Der Guard hasht privat vor/nach der lesenden Metadatensammlung und bindet Snapshotpfade/-inhalte sowie Overlaypfad. Für diese abgesicherte Rückwegvariante immer **beide** optionalen Runtime-Dateiflags ausdrücklich setzen. Ohne sie bleibt nur der frühere Originaldateimodus; daraus folgt keine Recoverygarantie bei verlorenen Originaldateien.
 
 Unmittelbar vor Cutover denselben Aufruf mit `--frozen /.../frozen-qa.json` statt `--freeze` ausführen. Guard prüft:
 
@@ -50,9 +54,9 @@ Unmittelbar vor Cutover denselben Aufruf mit `--frozen /.../frozen-qa.json` stat
 
 Der Guard hat eine feste 30-Sekunden-Grenze je lesender Docker-Abfrage. Fehlerausgabe enthält keine Eingabewerte. Ein STOPP ist kein Anlass für einen erzwungenen Compose-Neustart.
 
-### Eng begrenzte Normalisierung (Freezeformat 2)
+### Eng begrenzte Normalisierung (Freezeformat 3)
 
-Vor dem ersten Cutover werden die vollständigen rohen Ziel-Config/HostConfig/NetworkSettings/Mounts zusätzlich als Hash gebunden. Jede Änderung nach Freeze stoppt auch dann, wenn sie bei einem späteren Recreate normalerweise zulässig wäre. Format 1 wird nicht mehr akzeptiert; mit diesem Guard neu einfrieren.
+Vor dem ersten Cutover werden die vollständigen rohen Ziel-Config/HostConfig/NetworkSettings/Mounts zusätzlich als Hash gebunden. Jede Änderung nach Freeze stoppt auch dann, wenn sie bei einem späteren Recreate normalerweise zulässig wäre. Formate 1 und 2 werden nicht mehr akzeptiert; mit diesem Guard neu einfrieren.
 
 Zwischen alten und neuen Zielcontainern bleiben HostConfig, Mountmetadaten, effektive Ports, User/Cmd/Entrypoint, Netzidentitäten, Gateways/Präfixe, zusätzliche Aliase und sämtliche übrigen Configfelder eingefroren. Nur die separat ID-geprüfte Image-Referenz, der nachweislich aus der jeweiligen Container-ID erzeugte automatische Hostname und die vier Compose-Laufzeitlabels config-hash/image/replace/project.config_files werden beim Recreate normalisiert. Projekt-/Service-/Dateiprovenienz wird separat strikt geprüft. Geänderte Composeversion- oder andere Labels stoppen.
 
@@ -64,27 +68,28 @@ Der lesende Livepfad inspiziert zusätzlich immer alle gefrorenen Rückweg- und 
 
 ## Eng begrenzter Cutover
 
-Nur nach erfolgreichem Root-Preflight die unten projektspezifisch benannten Zielservices aufrufen. Immer die **bestehende absolute Serverbasis**, denselben Projektnamen und dasselbe Arbeitsverzeichnis nutzen:
+Nur nach erfolgreichem Root-Preflight die unten projektspezifisch benannten Zielservices aufrufen. Immer die **gebundene eingefrorene Basis und ENV-Datei**, denselben Projektnamen und das **ursprüngliche** Arbeitsverzeichnis nutzen. Das erhält die Auflösung relativer Bind-/Volume-/Buildpfade; kein Umzug der Runtimeumgebung:
 
 ```sh
 docker compose -p PROJEKT --project-directory BESTEHENDES-VERZEICHNIS \
-  -f BESTEHENDE-SERVER-COMPOSEDATEI -f ABSOLUTER-IMAGE-OVERLAY \
+  --env-file GEBUNDENER-ABSOLUTER-ENV-SNAPSHOT \
+  -f GEBUNDENER-ABSOLUTER-BASIS-SNAPSHOT -f ABSOLUTER-IMAGE-OVERLAY \
   up -d --no-deps --no-build --pull never NUR-BENANNTE-ZIELSERVICES
 ```
 
 Keine `down`-/`rm`-/`prune`-/`--remove-orphans`-/`--force-recreate`-/`--renew-anon-volumes`-Aktion. Insbesondere bedeutet `--no-deps` **nicht**, dass gleich gelabelte retained Zielcontainer geschützt wären; der Guard muss vorher abbrechen.
 
-Direkt danach denselben Guard mit `--post --candidate-file <derselbe absolute Overlaypfad> --frozen <derselbe Freeze>` ausführen. Anschließend nur vereinbarte anonyme Status-/Health-GETs und Versions-/Image-ID-Prüfungen. Zielcontainer müssen laufen/gesund sein; Peer-Identitäten/Starts/Bindungen bleiben identisch. Keine Kunden-/Konten-/Mail-/Buchungs-/Zahlungsdaten als Smokeprobe.
+Direkt danach denselben Guard mit denselben beiden Runtime-Dateiflags und `--post --candidate-file <derselbe absolute Overlaypfad> --frozen <derselbe Freeze>` ausführen. Anschließend nur vereinbarte anonyme Status-/Health-GETs und Versions-/Image-ID-Prüfungen. Zielcontainer müssen laufen/gesund sein; Peer-Identitäten/Starts/Bindungen bleiben identisch. Keine Kunden-/Konten-/Mail-/Buchungs-/Zahlungsdaten als Smokeprobe.
 
 ## Rückweg
 
-Bei Problemen alte gesicherte Ziel-Image-IDs aus `frozen.rollback_images` in dieselben Imagevariablen einsetzen. Nicht neu bauen und nicht das Checkout zurücksetzen. Erst Guard mit `--rollback` (ohne `--post`) ausführen: aktueller Vorwärtskandidat muss noch der erwartete sein, Peers unverändert, Rückweg exakt auf gefrorene alte IDs begrenzt. Danach derselbe eng begrenzte Compose-Aufruf, anschließend Guard mit `--rollback --post` und Status-GETs. Root vergleicht zusätzlich die vor dem Rückweg dokumentierten aktuellen Zielcontainer-IDs; der Freeze kann die zukünftigen Vorwärtscontainer-IDs noch nicht kennen.
+Bei Problemen alte gesicherte Ziel-Image-IDs aus `frozen.rollback_images` in dieselben Imagevariablen einsetzen. Nicht neu bauen und nicht das Checkout zurücksetzen. Erst Guard mit denselben beiden Runtime-Dateiflags und `--rollback` (ohne `--post`) ausführen: aktueller Vorwärtskandidat muss noch der erwartete sein, Peers unverändert, Rückweg exakt auf gefrorene alte IDs begrenzt. Danach derselbe eng begrenzte Compose-Aufruf mit **demselben gefrorenen Basis-/ENV-Snapshot und Overlaypfad**, anschließend Guard mit denselben Runtime-Dateiflags und `--rollback --post` und Status-GETs. Originalbasis oder Original-.env dürfen nach dem ersten Wechsel abweichen oder fehlen: Post-/Rückwegauflösung liest ausschließlich die gebundenen Snapshots; keine Originalüberschreibung oder Reparatur. Die Zielcontainerprovenienz muss nun exakt Snapshotbasis plus Overlay nennen, während alle unberührten Peers weiter ihre ursprüngliche Provenienz und Identitäten behalten. Vor dem ersten Cutover ist umgekehrt ausschließlich Originalbasis-Provenienz zulässig. Root vergleicht zusätzlich die vor dem Rückweg dokumentierten aktuellen Zielcontainer-IDs; der Freeze kann die zukünftigen Vorwärtscontainer-IDs noch nicht kennen.
 
 Bei retained Zielduplikaten, Identitätsdrift oder verlorenen Sicherungen **kein Compose-Rückweg**. Root muss eine separat geprüfte ID-gebundene Engine-Methode ohne DELETE festlegen. Dieses Runbook liefert dafür keine ungetestete Abkürzung.
 
 ## Quellen und Grenzen
 
-Docker-Dokumentation zu [up](https://docs.docker.com/reference/cli/docker/compose/up/), [config](https://docs.docker.com/reference/cli/docker/compose/config/) und [Merge](https://docs.docker.com/reference/compose-file/merge/) sowie [Netzwerk-/Adresszuweisung](https://docs.docker.com/engine/network/) und [Service-Konfiguration](https://docs.docker.com/reference/compose-file/services/) geprüft. Dass Compose beim Zielservice retained Dubletten entfernt, wurde im übergeordneten QA-Versuch tatsächlich beobachtet und hat Vorrang vor einer falschen Schutzannahme.
+Docker-Dokumentation zu [up](https://docs.docker.com/reference/cli/docker/compose/up/), [config](https://docs.docker.com/reference/cli/docker/compose/config/) und [Merge](https://docs.docker.com/reference/compose-file/merge/) sowie [Netzwerk-/Adresszuweisung](https://docs.docker.com/engine/network/) und [Service-Konfiguration](https://docs.docker.com/reference/compose-file/services/), [ENV-Datei/Interpolation](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/) und [Compose-Datei-/Projektverzeichnisauflösung](https://docs.docker.com/reference/cli/docker/compose/) geprüft. Shellvariablen haben weiter Vorrang; der gebundene aufgelöste Config-Hash muss deshalb bei jeder Prüfung gleich bleiben. --env-file betrifft Interpolation und ersetzt keine zusätzlichen service-env_file/include/extends-/Secret-/Config-Dateien; solche Quellen müssten separat eingefroren und geprüft werden. Ohne positiven Vollständigkeitsnachweis dieser Eingabequellen STOPP, keine behauptete Recoveryunabhängigkeit. Dass Compose beim Zielservice retained Dubletten entfernt, wurde im übergeordneten QA-Versuch tatsächlich beobachtet und hat Vorrang vor einer falschen Schutzannahme.
 
 Lokal getestet sind synthetische JSON-/CLI-Verträge; kein Docker-/Server-/Compose-Ausführungstest. Der Guard ist bewusst streng, insbesondere bei nicht unterstützter Konfigurationsdarstellung. Abweichungen nachlesen und prüfen, nicht die Prüfung umgehen. Keine Aussage über vollständige Datensicherung, Mailisolation oder produktive Abnahme.
 
