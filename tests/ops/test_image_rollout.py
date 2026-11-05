@@ -2,6 +2,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -57,6 +58,52 @@ def fixture(environment="qa"):
 
 
 class ImageRolloutTests(unittest.TestCase):
+    def private_snapshot_files(self, directory):
+        root = Path(directory).resolve()
+        project, checkpoint = root / "project", root / "checkpoint"
+        project.mkdir(mode=0o700)
+        checkpoint.mkdir(mode=0o700)
+        for name, value in [("base.yml", "services: {}\n"), (".env", "FIXTURE_MODE=fixture-only\n")]:
+            for folder in [project, checkpoint]:
+                path = folder / name
+                path.write_text(value)
+                path.chmod(0o600)
+        policy = {"project_dir": str(project), "config_file": str(project / "base.yml")}
+        return policy, project, checkpoint
+
+    def test_original_path_aliases_and_hardlinks_are_not_independent_snapshots(self):
+        for name in ["base.yml", ".env"]:
+            for kind in ["dotdot-alias", "hardlink"]:
+                with self.subTest(name=name, kind=kind), tempfile.TemporaryDirectory(prefix="rollout-independent-fixture-") as directory:
+                    policy, project, checkpoint = self.private_snapshot_files(directory)
+                    guard.runtime_file_metadata(policy, str(checkpoint / "images.yml"),
+                                                str(checkpoint / "base.yml"), str(checkpoint / ".env"), True)
+                    if kind == "dotdot-alias":
+                        snapshot = project / ".." / project.name / name
+                    else:
+                        snapshot = checkpoint / name
+                        snapshot.unlink()
+                        os.link(project / name, snapshot)
+                    base = str(snapshot if name == "base.yml" else checkpoint / "base.yml")
+                    env = str(snapshot if name == ".env" else checkpoint / ".env")
+                    with self.assertRaises(guard.RolloutError):
+                        guard.runtime_file_metadata(policy, str(checkpoint / "images.yml"), base, env, True)
+
+    def test_independent_snapshot_paths_are_normalized_and_originals_not_read_after_swap(self):
+        with tempfile.TemporaryDirectory(prefix="rollout-independent-fixture-") as directory:
+            policy, project, checkpoint = self.private_snapshot_files(directory)
+            base = str(checkpoint / ".." / checkpoint.name / "base.yml")
+            env = str(checkpoint / ".." / checkpoint.name / ".env")
+            files, original = guard.runtime_file_metadata(policy, str(checkpoint / "images.yml"), base, env, True)
+            self.assertEqual(files["base_file"], str(checkpoint / "base.yml"))
+            self.assertEqual(files["env_file"], str(checkpoint / ".env"))
+            (project / "base.yml").unlink()
+            (project / ".env").unlink()
+            after, absent = guard.runtime_file_metadata(policy, str(checkpoint / "images.yml"), base, env, False)
+            self.assertEqual(after, files)
+            self.assertIsNone(absent)
+            self.assertIsNotNone(original)
+
     def snapshot_fixture(self):
         payload, policy = fixture()
         payload["runtime_files"] = {"base_file": "/checkpoint/base.compose.yml", "env_file": "/checkpoint/runtime.env",
@@ -112,7 +159,7 @@ class ImageRolloutTests(unittest.TestCase):
     def test_snapshot_cli_uses_same_private_files_after_originals_are_missing(self):
         payload, policy = fixture()
         with tempfile.TemporaryDirectory(prefix="rollout-private-fixture-") as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             original, checkpoint = root / "original", root / "checkpoint"
             original.mkdir(mode=0o700)
             checkpoint.mkdir(mode=0o700)

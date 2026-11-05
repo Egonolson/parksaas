@@ -332,16 +332,35 @@ def file_digest(path, protected=False):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def normalized_snapshot_path(path):
+    require(path and Path(path).is_absolute(), "absolute snapshot file required")
+    require(not Path(path).is_symlink(), "snapshot must not be a symbolic link")
+    return str(Path(path).resolve(strict=True))
+
+
+def require_independent_snapshot(snapshot, original):
+    source = Path(original).resolve(strict=True)
+    require(snapshot != str(source), "snapshot path aliases original")
+    saved, live = os.stat(snapshot), os.stat(source)
+    require((saved.st_dev, saved.st_ino) != (live.st_dev, live.st_ino), "snapshot hardlinks original")
+
+
 def runtime_file_metadata(policy, candidate_file, runtime_base_file, runtime_env_file, check_original):
     if not runtime_base_file and not runtime_env_file:
         return None, None
-    base_file = runtime_base_file or policy["config_file"]
-    require(not runtime_base_file or runtime_base_file != policy["config_file"], "snapshot must not be original base")
+    base_file = normalized_snapshot_path(runtime_base_file or policy["config_file"])
+    env_file = normalized_snapshot_path(runtime_env_file) if runtime_env_file else None
     original_env = str(Path(policy["project_dir"]) / ".env")
-    require(not runtime_env_file or runtime_env_file != original_env, "snapshot must not be original environment")
-    files = {"base_file": base_file, "env_file": runtime_env_file, "candidate_file": candidate_file,
+    # This gate runs only before freeze/first cutover. Recovery deliberately
+    # does not resolve, stat or read original files, which may no longer exist.
+    if check_original:
+        if runtime_base_file:
+            require_independent_snapshot(base_file, policy["config_file"])
+        if runtime_env_file:
+            require_independent_snapshot(env_file, original_env)
+    files = {"base_file": base_file, "env_file": env_file, "candidate_file": candidate_file,
              "base_sha256": file_digest(base_file, bool(runtime_base_file)),
-             "env_sha256": file_digest(runtime_env_file, True) if runtime_env_file else None}
+             "env_sha256": file_digest(env_file, True) if runtime_env_file else None}
     original = None
     if check_original:
         original = {"base_sha256": file_digest(policy["config_file"]),
@@ -357,8 +376,8 @@ def collect(policy, candidate_file, required_images=(), runtime_base_file=None, 
     base = ["docker", "compose", "-p", policy["project"], "--project-directory",
             policy["project_dir"]]
     if runtime_env_file:
-        base += ["--env-file", runtime_env_file]
-    base += ["-f", runtime_base_file or policy["config_file"]]
+        base += ["--env-file", files["env_file"]]
+    base += ["-f", files["base_file"] if files else policy["config_file"]]
     before = read_json(base + ["config", "--format", "json"])
     after = read_json(base + ["-f", candidate_file, "config", "--format", "json"])
     result = subprocess.run(["docker", "ps", "-aq", "--filter",
