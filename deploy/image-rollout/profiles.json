@@ -1,0 +1,108 @@
+{
+  "qa": {
+    "project": "parksaas",
+    "project_dir": "/mnt/HC_Volume_105075389/workspaces/project-manager/parksaas",
+    "config_file": "/mnt/HC_Volume_105075389/workspaces/project-manager/parksaas/docker-compose.yml",
+    "targets": [
+      "backend",
+      "frontend"
+    ],
+    "services": {
+      "backend": {
+        "container": "parksaas-backend",
+        "ports": {},
+        "networks": [
+          "parksaas_default"
+        ]
+      },
+      "frontend": {
+        "container": "parksaas-frontend",
+        "ports": {},
+        "networks": [
+          "parksaas_default"
+        ]
+      },
+      "nginx": {
+        "container": "parksaas-nginx",
+        "ports": {
+          "80/tcp": [
+            [
+              "127.0.0.1",
+              "8400"
+            ]
+          ]
+        },
+        "networks": [
+          "parksaas_default"
+        ]
+      },
+      "db": {
+        "container": "parksaas-db",
+        "ports": {
+          "5432/tcp": [
+            [
+              "127.0.0.1",
+              "5472"
+            ]
+          ]
+        },
+        "networks": [
+          "parksaas_default"
+        ]
+      }
+    }
+  },
+  "prod": {
+    "project": "parksaas",
+    "project_dir": "/mnt/HC_Volume_105474481/workspaces/project-manager/parksaas",
+    "config_file": "/mnt/HC_Volume_105474481/workspaces/project-manager/parksaas/docker-compose.yml",
+    "targets": [
+      "backend",
+      "frontend"
+    ],
+    "services": {
+      "backend": {
+        "container": "parksaas-backend",
+        "ports": {},
+        "networks": [
+          "parksaas_default"
+        ]
+      },
+      "frontend": {
+        "container": "parksaas-frontend",
+        "ports": {},
+        "networks": [
+          "parksaas_default"
+        ]
+      },
+      "nginx": {
+        "container": "parksaas-nginx",
+        "ports": {
+          "80/tcp": [
+            [
+              "127.0.0.1",
+              "8400"
+            ]
+          ]
+        },
+        "networks": [
+          "parksaas_default"
+        ]
+      },
+      "db": {
+        "container": "parksaas-db",
+        "ports": {
+          "5432/tcp": [
+            [
+              "127.0.0.1",
+              "5472"
+            ]
+          ]
+        },
+        "networks": [
+          "parksaas_default"
+        ]
+      }
+    }
+  }
+}

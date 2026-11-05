@@ -1,0 +1,7 @@
+services:
+  backend:
+    image: ${PARKSAAS_BACKEND_IMAGE:?verified local sha256 image ID required}
+    pull_policy: never
+  frontend:
+    image: ${PARKSAAS_FRONTEND_IMAGE:?verified local sha256 image ID required}
+    pull_policy: never
