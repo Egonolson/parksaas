@@ -13,3 +13,6 @@ Testausnahme: Reine Versions-/Containerkonfiguration; kein zusätzlicher Test, d
 
 ## Offen
 Linux-/musl-Containerbuild und QA-Laufzeitnachweis, unabhängiges Review, Merge und Deployment.
+
+## Sicherheits-Patchrunde
+Nur bestehende Versionsbereiche automatisch reparieren, keine erzwungenen Majorwechsel. Zod4.6.7, bei Chapter Nodemailer10.3.1 und bei Eschrich PostCSS8.5.32 sind gezielte Patches. Eschrich erhält die von Next16 erforderlichen JSX-/Typinclude-Einstellungen. Verbleibende Majorupdates und Lintbefunde werden vor einer Freigabe offengelegt.
