@@ -43,12 +43,24 @@ Unmittelbar vor Cutover denselben Aufruf mit `--frozen /.../frozen-qa.json` stat
 
 - vollständige Labelzählung aus `docker ps -aq`, inklusive gestoppter Container;
 - Projekt, Namen, Basisdatei, Arbeitsverzeichnis und vollständige Service-Menge;
-- tatsächliche und deklarierte Ports, Netzwerke, Mounts und unterstützte Hardeningfelder;
-- App-Umgebung; zusätzliche manuelle ENV-Werte, die weder Compose noch Image-Defaults enthält, führen zum Abbruch;
+- tatsächliche und deklarierte Ports/Netzwerke/Mounts sowie vollständige Config-, HostConfig- und NetworkSettings-Fingerprints der Ziele; damit auch User/Cmd, CPU/Ulimits/Logging und effektive Ports;
+- vollständige effektive Laufzeit-ENV einschließlich geerbter Image-Defaults; unbekannte oder veränderte App-/Mailwerte stoppen bereits bei der Kandidatenprüfung;
 - ausschließlich freigegebene unveränderliche Zielimage-IDs, Linux/amd64 und keine Pulls;
 - keine weitere Konfigurationsänderung und keine zwischenzeitlich ersetzten/neu gestarteten Ziel- oder Peer-Container.
 
 Der Guard hat eine feste 30-Sekunden-Grenze je lesender Docker-Abfrage. Fehlerausgabe enthält keine Eingabewerte. Ein STOPP ist kein Anlass für einen erzwungenen Compose-Neustart.
+
+### Eng begrenzte Normalisierung (Freezeformat 2)
+
+Vor dem ersten Cutover werden die vollständigen rohen Ziel-Config/HostConfig/NetworkSettings/Mounts zusätzlich als Hash gebunden. Jede Änderung nach Freeze stoppt auch dann, wenn sie bei einem späteren Recreate normalerweise zulässig wäre. Format 1 wird nicht mehr akzeptiert; mit diesem Guard neu einfrieren.
+
+Zwischen alten und neuen Zielcontainern bleiben HostConfig, Mountmetadaten, effektive Ports, User/Cmd/Entrypoint, Netzidentitäten, Gateways/Präfixe, zusätzliche Aliase und sämtliche übrigen Configfelder eingefroren. Nur die separat ID-geprüfte Image-Referenz, der nachweislich aus der jeweiligen Container-ID erzeugte automatische Hostname und die vier Compose-Laufzeitlabels config-hash/image/replace/project.config_files werden beim Recreate normalisiert. Projekt-/Service-/Dateiprovenienz wird separat strikt geprüft. Geänderte Composeversion- oder andere Labels stoppen.
+
+Netzwerkseitig dürfen nur SandboxID/SandboxKey, EndpointID, automatisch vergebene IP-/MAC-Adressen und Aliase exakt gleich der jeweiligen Container-ID/-Kurz-ID wechseln. Statisch deklarierte Adressen/Hostname und alle weiteren Netzfelder bleiben geschützt. Vor dem Cutover schützt zusätzlich der rohe Hash auch diese dynamischen Werte. Diese Ausnahmen betreffen ausschließlich aktualisierte Ziele; alle Peer-Metadaten bleiben vollständig unverändert.
+
+ENV-Normalisierung erlaubt ausschließlich die benannten upstream Versionsmarker NODE_VERSION, YARN_VERSION, NGINX_VERSION, NJS_VERSION, NJS_RELEASE, PKG_RELEASE und DYNPKG_RELEASE, sofern sie nicht von Compose deklariert sind und exakt den lokal geprüften Image-Defaults entsprechen. App-Versionen, PATH, MAIL_MODE und unbekannte geerbte Variablen sind nicht ausgenommen. Doppelte ENV-Schlüssel stoppen. Manuell von Compose/Image abweichende User-/Cmd-/Entrypoint-/WorkingDir-Werte stoppen vor dem Recreate; Prozessarrays müssen aufgelöst vorliegen. Kandidaten müssen außerdem dieselben User-/Cmd-/Entrypoint-/WorkingDir-/StopSignal-/Healthcheck-/ExposedPorts-/Volumes-/Shell-Defaults wie das gesicherte alte Image haben. Absichtlich geänderte Startsemantik erfordert einen eigenen überprüften Plan, keine Erweiterung der Ausnahmen im Betrieb.
+
+Der lesende Livepfad inspiziert zusätzlich immer alle gefrorenen Rückweg- und Kandidatenimage-IDs, damit die alten Defaults auch nach einem Swap verfügbar bleiben. Fehlende alte Images stoppen. Die bestehende Node-26-CI führt die Python-Guardtests aus. Ihre PR-/Push-Trigger und Rechte bleiben unverändert; vorhandene Workflows haben keine Pfadfilter, daher schließen sie Ops-/Dokumentationsänderungen bereits ein. Kein Produktionsworkflow wird angepasst.
 
 ## Eng begrenzter Cutover
 
@@ -72,7 +84,7 @@ Bei retained Zielduplikaten, Identitätsdrift oder verlorenen Sicherungen **kein
 
 ## Quellen und Grenzen
 
-Docker-Dokumentation zu [up](https://docs.docker.com/reference/cli/docker/compose/up/), [config](https://docs.docker.com/reference/cli/docker/compose/config/) und [Merge](https://docs.docker.com/reference/compose-file/merge/) geprüft. Dass Compose beim Zielservice retained Dubletten entfernt, wurde im übergeordneten QA-Versuch tatsächlich beobachtet und hat Vorrang vor einer falschen Schutzannahme.
+Docker-Dokumentation zu [up](https://docs.docker.com/reference/cli/docker/compose/up/), [config](https://docs.docker.com/reference/cli/docker/compose/config/) und [Merge](https://docs.docker.com/reference/compose-file/merge/) sowie [Netzwerk-/Adresszuweisung](https://docs.docker.com/engine/network/) und [Service-Konfiguration](https://docs.docker.com/reference/compose-file/services/) geprüft. Dass Compose beim Zielservice retained Dubletten entfernt, wurde im übergeordneten QA-Versuch tatsächlich beobachtet und hat Vorrang vor einer falschen Schutzannahme.
 
 Lokal getestet sind synthetische JSON-/CLI-Verträge; kein Docker-/Server-/Compose-Ausführungstest. Der Guard ist bewusst streng, insbesondere bei nicht unterstützter Konfigurationsdarstellung. Abweichungen nachlesen und prüfen, nicht die Prüfung umgehen. Keine Aussage über vollständige Datensicherung, Mailisolation oder produktive Abnahme.
 

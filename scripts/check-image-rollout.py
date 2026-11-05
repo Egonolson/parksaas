@@ -23,7 +23,73 @@ def digest(value):
 
 
 def env_map(values):
-    return dict(value.split("=", 1) if "=" in value else (value, "") for value in values)
+    result = {}
+    for value in values:
+        key, item = value.split("=", 1) if "=" in value else (value, "")
+        require(key not in result, "duplicate effective environment key")
+        result[key] = item
+    return result
+
+
+# Only these upstream runtime version markers may change with the selected image.
+# Application flags, PATH, mail settings and unknown inherited values remain frozen.
+VERSION_ENV = frozenset({"NODE_VERSION", "YARN_VERSION", "NGINX_VERSION", "NJS_VERSION",
+                         "NJS_RELEASE", "PKG_RELEASE", "DYNPKG_RELEASE"})
+
+
+def effective_env(image, definition):
+    declared = definition.get("environment") or {}
+    require(isinstance(declared, dict) and all(value is not None for value in declared.values()),
+            "resolved environment mapping required")
+    return env_map(image["Config"].get("Env", [])) | {key: str(value) for key, value in declared.items()}
+
+
+def stable_env(values, definition):
+    declared = definition.get("environment") or {}
+    return {key: value for key, value in values.items() if key not in VERSION_ENV or key in declared}
+
+
+def target_fingerprint(container, definition, model):
+    """Freeze all inspect configuration, with explicit recreate-only normalization."""
+    config = copy.deepcopy(container["Config"])
+    config["Env"] = stable_env(env_map(config.get("Env", [])), definition)
+    # Image selection/provenance is checked separately against the immutable plan.
+    config.pop("Image", None)
+    identifier = container["Id"]
+    if not definition.get("hostname") and config.get("Hostname") == identifier[:12]:
+        config["Hostname"] = "<automatic-container-hostname>"
+    labels = config.get("Labels") or {}
+    for name in ("com.docker.compose.config-hash", "com.docker.compose.image",
+                 "com.docker.compose.replace", "com.docker.compose.project.config_files"):
+        labels.pop(name, None)
+    config["Labels"] = labels
+    network = copy.deepcopy(container.get("NetworkSettings", {}))
+    for key in ("SandboxID", "SandboxKey"):
+        network.pop(key, None)
+    # Ports, gateway/prefixes, network IDs, driver options and static addressing stay.
+    for name, endpoint in network.get("Networks", {}).items():
+        endpoint.pop("EndpointID", None)
+        logical = definition.get("networks") or {}
+        options = next((value or {} for key, value in logical.items()
+                        if model.get("networks", {}).get(key, {}).get("name", model["name"] + "_" + key) == name), {})
+        # Full physical network names are already validated against Compose/policy.
+        # Only allocator-generated addresses may differ on a new endpoint.
+        if not options.get("ipv4_address"):
+            endpoint.pop("IPAddress", None)
+        if not options.get("ipv6_address"):
+            endpoint.pop("GlobalIPv6Address", None)
+        if not options.get("mac_address") and not definition.get("mac_address"):
+            endpoint.pop("MacAddress", None)
+        for key in ("Aliases", "DNSNames"):
+            if endpoint.get(key) is not None:
+                endpoint[key] = sorted("<automatic-container-id>" if item in (identifier, identifier[:12])
+                                       else item for item in endpoint[key])
+    return {"config": config, "host": container["HostConfig"],
+            "networks": network, "mounts": container.get("Mounts", [])}
+
+
+def raw_target(container):
+    return digest({key: container.get(key) for key in ("Config", "HostConfig", "NetworkSettings", "Mounts")})
 
 
 def bindings(values):
@@ -129,11 +195,22 @@ def runtime_state(payload, policy, config, post=False, candidate_file=None):
         require(all(actual_env.get(key) == str(value) for key, value in declared_env.items()), "environment drift")
         image = images.get(container["Image"])
         require(image is not None and "Config" in image, "current image metadata including defaults required")
-        defaults = env_map(image["Config"].get("Env", []))
-        require(all(key in declared_env or defaults.get(key) == value for key, value in actual_env.items()),
-                "runtime-only environment would be lost")
+        require(actual_env == effective_env(image, definition), "effective runtime environment mismatch")
+        if service in policy["targets"]:
+            for key, attribute in (("User", "user"), ("Cmd", "command"),
+                                   ("Entrypoint", "entrypoint"), ("WorkingDir", "working_dir")):
+                expected_process = definition.get(attribute)
+                if expected_process is None:
+                    expected_process = image["Config"].get(key)
+                elif key in ("Cmd", "Entrypoint"):
+                    require(isinstance(expected_process, list), "resolved process array required")
+                else:
+                    expected_process = str(expected_process)
+                require(container["Config"].get(key) == expected_process, "unreproducible runtime process override")
         entry = {"ports": ports, "networks": networks, "mounts": mounts, "hardening": security,
                  "environment": declared_env}
+        if service in policy["targets"]:
+            entry["complete_target"] = target_fingerprint(container, definition, config)
         if service not in policy["targets"]:
             entry.update(container_id=container["Id"], image_id=container["Image"])
             entry["all_peers"] = sorted([{
@@ -149,12 +226,12 @@ def runtime_state(payload, policy, config, post=False, candidate_file=None):
 
 def freeze(payload, policy):
     state, images = runtime_state(payload, policy, payload["before"])
-    frozen = {"format": 1, "policy_sha256": digest(policy), "config_sha256": digest(payload["before"]),
+    frozen = {"format": 2, "policy_sha256": digest(policy), "config_sha256": digest(payload["before"]),
             "runtime_sha256": digest(state),
             "rollback_images": {service: images[service] for service in policy["targets"]},
             "target_containers": {container["Config"]["Labels"]["com.docker.compose.service"]:
                 {"id": container["Id"], "started": container["State"].get("StartedAt"),
-                 "restarts": container.get("RestartCount")}
+                 "restarts": container.get("RestartCount"), "raw_sha256": raw_target(container)}
                 for container in payload["containers"]
                 if container.get("Config", {}).get("Labels", {}).get("com.docker.compose.project") == policy["project"]
                 and container["Config"]["Labels"].get("com.docker.compose.service") in policy["targets"]},
@@ -165,7 +242,7 @@ def freeze(payload, policy):
 
 
 def check(payload, policy, frozen, post=False, candidate_file=None, rollback=False):
-    require(frozen.get("format") == 1 and frozen.get("policy_sha256") == digest(policy), "frozen policy mismatch")
+    require(frozen.get("format") == 2 and frozen.get("policy_sha256") == digest(policy), "frozen policy mismatch")
     require(frozen.get("config_sha256") == digest(payload["before"]), "frozen base config drift")
     before, after = copy.deepcopy(payload["before"]), copy.deepcopy(payload["after"])
     require(after.get("name") == policy["project"], "candidate project mismatch")
@@ -180,6 +257,15 @@ def check(payload, policy, frozen, post=False, candidate_file=None, rollback=Fal
         require(image is not None and image.get("Os") == "linux" and image.get("Architecture") == "amd64",
                 "candidate must be a locally inspected linux/amd64 image")
         require(after["services"][service].get("pull_policy") == "never", "candidate must disable registry pulls")
+        baseline = images.get(frozen["rollback_images"][service])
+        require(baseline is not None and "Config" in baseline, "rollback image defaults required")
+        definition = payload["before"]["services"][service]
+        require(stable_env(effective_env(baseline, definition), definition) ==
+                stable_env(effective_env(image, definition), definition), "candidate inherited environment changed")
+        # An image-only release must preserve process/user defaults too. Fail closed
+        # even if Compose overrides them; a deliberate change needs its own review.
+        for key in ("User", "Cmd", "Entrypoint", "WorkingDir", "StopSignal", "Healthcheck", "ExposedPorts", "Volumes", "Shell"):
+            require(baseline["Config"].get(key) == image["Config"].get(key), "candidate process defaults changed")
         for key in ["image", "pull_policy"]:
             before["services"][service].pop(key, None)
             after["services"][service].pop(key, None)
@@ -193,11 +279,16 @@ def check(payload, policy, frozen, post=False, candidate_file=None, rollback=Fal
             service = labels.get("com.docker.compose.service")
             if labels.get("com.docker.compose.project") == policy["project"] and service in policy["targets"]:
                 identity = {"id": container["Id"], "started": container["State"].get("StartedAt"),
-                            "restarts": container.get("RestartCount")}
+                            "restarts": container.get("RestartCount"), "raw_sha256": raw_target(container)}
                 require(identity == frozen["target_containers"][service], "target identity changed before cutover")
     for service in policy["targets"]:
         expected = payload["after"]["services"][service]["image"] if post else frozen["candidate_images" if rollback else "rollback_images"][service]
         require(current_images[service] == expected, "selected service image changed unexpectedly")
+        for container in payload["containers"]:
+            labels = container.get("Config", {}).get("Labels", {})
+            if (post or rollback) and labels.get("com.docker.compose.project") == policy["project"] and labels.get("com.docker.compose.service") == service:
+                if "Image" in container["Config"]:
+                    require(container["Config"]["Image"] == expected, "runtime image reference drift")
     return {"ok": True, "project": policy["project"], "targets": policy["targets"],
             "mode": "postcheck" if post else "preflight", "rollback": rollback}
 
@@ -208,7 +299,7 @@ def read_json(command):
     return json.loads(result.stdout)
 
 
-def collect(policy, candidate_file):
+def collect(policy, candidate_file, required_images=()):
     require(candidate_file and Path(candidate_file).is_absolute(), "absolute candidate file required")
     base = ["docker", "compose", "-p", policy["project"], "--project-directory",
             policy["project_dir"], "-f", policy["config_file"]]
@@ -221,6 +312,9 @@ def collect(policy, candidate_file):
     require(result.returncode == 0 and ids, "complete container inventory required")
     containers = read_json(["docker", "inspect", *ids])
     image_ids = {container["Image"] for container in containers}
+    for image_id in required_images:
+        require(re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is not None, "frozen local image ID required")
+        image_ids.add(image_id)
     for service in policy["targets"]:
         image_id = after["services"][service].get("image", "")
         require(re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is not None, "local candidate image ID required")
@@ -242,13 +336,16 @@ def main():
     args = parser.parse_args()
     try:
         policy = json.loads(Path(args.profiles).read_text())[args.environment]
-        payload = collect(policy, args.candidate_file) if args.live else json.load(sys.stdin)
+        frozen = json.loads(Path(args.frozen).read_text()) if args.frozen else None
+        required_images = list((frozen or {}).get("rollback_images", {}).values())
+        required_images += list((frozen or {}).get("candidate_images", {}).values())
+        payload = collect(policy, args.candidate_file, required_images) if args.live else json.load(sys.stdin)
         if args.freeze:
             require(not args.post and not args.frozen and not args.rollback, "freeze cannot be combined with check")
             result = freeze(payload, policy)
         else:
             require(args.frozen is not None, "frozen approval required")
-            result = check(payload, policy, json.loads(Path(args.frozen).read_text()), args.post,
+            result = check(payload, policy, frozen, args.post,
                            args.candidate_file, args.rollback)
         print(json.dumps(result, sort_keys=True))
         return 0

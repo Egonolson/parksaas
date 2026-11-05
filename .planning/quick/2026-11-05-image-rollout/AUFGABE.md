@@ -33,3 +33,23 @@ Lokale Umsetzung und Prüfungen abgeschlossen; unabhängiges Review, Sicherung/R
 ## Noch offen
 
 Unabhängiges Review, echte lesende Root-Vorprüfung inklusive aller Container, passende Artefaktprovenienz, Sicherung/isolierte Restoreprobe, positive QA-Mail-/Datenisolation und sämtliche tatsächlichen Serveraktionen. Kein Blocker durch retained Nicht-Ziel-Proxy allein; frische Zielzählung bleibt erforderlich.
+
+## Reviewkorrektur: vollständiger Zielzustand und CI
+
+Kurzplan vor Abschluss: konkret reproduzierte Guardlücken mit roten Verhaltensfällen festhalten, vollständige Ziel-Fingerprints und effektive geerbte ENV binden, nur explizite Recreate-/Versionsmetadaten eng normalisieren und die Guardtests in der vorhandenen Node-26-CI ausführen. Keine Trigger/Rechte oder Produktionsautomation ändern.
+
+Gegenproben zunächst rot: 17 akzeptierte Änderungen in 22 Tests (CPU/Ulimits/LogConfig/User/Cmd/Ports vor/nach Cutover, MAIL_MODE/unbekannte/App-Version-Defaults, Kandidat-User/Cmd). Danach 28/28 Tests grün; zusätzliche positive dynamische Endpoint-/Hostname-Recreation und negative statische IP-/Hostname-, ENV-Duplikat-/Compose-Versions- und Netz-ID/Gateway/Alias/Präfixfälle. Vollständige effektive ENV, rohe Preflight-Zielhashes und normalisierte vollständige Post-Fingerprints; Format 2 erzwingt neuen Freeze. Genauer Allowlistvertrag im Runbook.
+
+Bestehende Node-26-Test-CI bekommt ausschließlich einen Python-Guardtestschritt; keine Pfadfilter vorhanden/erforderlich, Trigger/Rechte unverändert. Produktionsworkflow unverändert. Diese Korrektur braucht erneutes unabhängiges Review des finalen Heads; kein Server-/Docker-/Deploymentlauf.
+
+Belegte Abschlussausgaben der Korrektur:
+```text
+Rot: Ran 22 tests / FAILED (failures=17)
+Grün: Ran 28 tests / OK (beide Repositories)
+Python AST and profile JSON OK
+CI parsed; only ops-test step differs; triggers, permissions and existing gates unchanged
+ParkenGessental: production workflow byte-identical
+```
+Keine App-/Dependencyänderung; daher ausschließlich betroffene Python-Suite und AST/JSON/YAML-/Diffprüfung erneut ausgeführt, keine unveränderten Appbuilds oder echten Dockerläufe.
+
+Zusätzliche eigene Abschlusskorrekturen ebenfalls rot→grün: manuelle User/Cmd/Entrypoint/WorkingDir-Werte ohne reproduzierbare Compose-/Imagebasis (vier zunächst akzeptierte Fälle), positive Rückwegprüfung mit tatsächlichem Config.Image (zunächst falscher Referenzvergleich), sowie CLI-Live-Postcheck mit gefrorenen alten Image-IDs (zunächst fehlende alte Metadaten nach Cutover). Jetzt werden alle gefrorenen Rückweg-/Kandidatenimage-IDs zusätzlich lesend inspiziert und Vorwärts-/Rückweg-Prozessreferenzen korrekt geprüft. Der Livepfadtest mockt ausschließlich die lesenden Docker-Probes und bestätigt alle Commands; kein echter Dockeraufruf.

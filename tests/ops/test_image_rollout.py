@@ -7,6 +7,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+import contextlib
+import io
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("rollout_guard", ROOT / "scripts/check-image-rollout.py")
@@ -54,6 +57,138 @@ def fixture(environment="qa"):
 
 
 class ImageRolloutTests(unittest.TestCase):
+    def forward(self, payload, policy, overlay="/fixture/images.compose.yaml"):
+        for container in payload["containers"]:
+            service = container["Config"]["Labels"]["com.docker.compose.service"]
+            if service in policy["targets"]:
+                container["Id"] += "-new"
+                container["Image"] = payload["after"]["services"][service]["image"]
+                container["Config"]["Env"][-1] = "NODE_VERSION=new"
+                container["Config"]["Labels"]["com.docker.compose.project.config_files"] += "," + overlay
+        return overlay
+
+    def test_full_target_metadata_drift_is_rejected_before_and_after_cutover(self):
+        changes = [
+            ("HostConfig", "CpuQuota", 20000),
+            ("HostConfig", "Ulimits", [{"Name": "nofile", "Soft": 1000, "Hard": 1000}]),
+            ("HostConfig", "LogConfig", {"Type": "none", "Config": {}}),
+            ("Config", "User", "unexpected-root"),
+            ("Config", "Cmd", ["sh", "-c", "false"]),
+            ("NetworkSettings", "Ports", {"9999/tcp": [{"HostIp": "0.0.0.0", "HostPort": "9999"}]}),
+        ]
+        for section, key, value in changes:
+            for post in [False, True]:
+                with self.subTest(section=section, key=key, post=post):
+                    payload, policy = fixture()
+                    frozen = guard.freeze(payload, policy)
+                    overlay = self.forward(payload, policy) if post else None
+                    payload["containers"][0][section][key] = value
+                    self.assert_blocked(payload, policy, frozen, post=post, candidate_file=overlay)
+
+    def test_candidate_must_preserve_mail_and_unknown_inherited_environment(self):
+        for key in ["MAIL_MODE", "UNRECOGNIZED_INHERITED", "APP_VERSION"]:
+            with self.subTest(key=key):
+                payload, policy = fixture()
+                container = payload["containers"][0]
+                container["Config"]["Env"].append(key + "=local-sink")
+                old = next(i for i in payload["images"] if i["Id"] == container["Image"])
+                old["Config"]["Env"].append(key + "=local-sink")
+                new_id = payload["after"]["services"][policy["targets"][0]]["image"]
+                new = next(i for i in payload["images"] if i["Id"] == new_id)
+                new["Config"]["Env"].append(key + "=external")
+                self.assert_blocked(payload, policy)
+
+    def test_candidate_cannot_silently_change_image_user_or_command(self):
+        for key, value in [("User", "root"), ("Cmd", ["unexpected-command"])]:
+            with self.subTest(key=key):
+                payload, policy = fixture()
+                new_id = payload["after"]["services"][policy["targets"][0]]["image"]
+                next(i for i in payload["images"] if i["Id"] == new_id)["Config"][key] = value
+                self.assert_blocked(payload, policy)
+
+    def test_manual_runtime_process_override_would_not_be_lost_at_recreate(self):
+        for key, value in [("User", "manual-user"), ("Cmd", ["manual-command"]),
+                           ("Entrypoint", ["manual-entrypoint"]), ("WorkingDir", "/manual-dir")]:
+            with self.subTest(key=key):
+                payload, policy = fixture()
+                payload["containers"][0]["Config"][key] = value
+                self.assert_blocked(payload, policy)
+
+    def test_effective_environment_remains_frozen_after_cutover(self):
+        for key in ["MAIL_MODE", "UNRECOGNIZED_INHERITED", "APP_VERSION"]:
+            with self.subTest(key=key):
+                payload, policy = fixture()
+                container = payload["containers"][0]
+                container["Config"]["Env"].append(key + "=local-sink")
+                service = policy["targets"][0]
+                for image in payload["images"]:
+                    if image["Id"] in (container["Image"], payload["after"]["services"][service]["image"]):
+                        image["Config"]["Env"].append(key + "=local-sink")
+                frozen = guard.freeze(payload, policy)
+                # Restore NODE_VERSION ordering expected by the forward fixture.
+                container["Config"]["Env"].sort(key=lambda value: value.startswith("NODE_VERSION="))
+                overlay = self.forward(payload, policy)
+                container["Config"]["Env"] = [key + "=external" if item.startswith(key + "=") else item
+                                               for item in container["Config"]["Env"]]
+                self.assert_blocked(payload, policy, frozen, post=True, candidate_file=overlay)
+
+    def test_only_allocator_generated_endpoint_metadata_can_change_on_recreate(self):
+        payload, policy = fixture()
+        container = payload["containers"][0]
+        container["Id"] = "a" * 64
+        container["Config"].update(Hostname=container["Id"][:12], Image=container["Image"])
+        settings = container["NetworkSettings"]
+        settings.update(SandboxID="old-sandbox", SandboxKey="/old/sandbox", Ports={})
+        endpoint = next(iter(settings["Networks"].values()))
+        endpoint.update(NetworkID="frozen-network-id", EndpointID="old-endpoint", IPAddress="172.20.0.2",
+                        GlobalIPv6Address="", MacAddress="02:42:ac:14:00:02", Gateway="172.20.0.1",
+                        IPPrefixLen=16, Aliases=["backend", container["Id"][:12]])
+        frozen = guard.freeze(payload, policy)
+        overlay = self.forward(payload, policy)
+        container["Id"] = "b" * 64
+        container["Config"].update(Hostname=container["Id"][:12], Image=container["Image"])
+        settings.update(SandboxID="new-sandbox", SandboxKey="/new/sandbox")
+        endpoint.update(EndpointID="new-endpoint", IPAddress="172.20.0.3",
+                        MacAddress="02:42:ac:14:00:03", Aliases=["backend", container["Id"][:12]])
+        self.assertTrue(guard.check(payload, policy, frozen, post=True, candidate_file=overlay)["ok"])
+        for key, value in [("NetworkID", "unapproved-network"), ("Gateway", "172.20.0.254"),
+                           ("Aliases", ["unapproved-alias"]), ("IPPrefixLen", 24)]:
+            with self.subTest(key=key):
+                original = endpoint[key]
+                endpoint[key] = value
+                self.assert_blocked(payload, policy, frozen, post=True, candidate_file=overlay)
+                endpoint[key] = original
+
+    def test_static_ip_and_custom_hostname_are_not_normalized(self):
+        payload, policy = fixture()
+        service = policy["targets"][0]
+        for model in [payload["before"], payload["after"]]:
+            model["services"][service]["networks"]["frozen"] = {"ipv4_address": "172.20.0.2"}
+            model["services"][service]["hostname"] = "fixed-host"
+        container = payload["containers"][0]
+        container["Config"]["Hostname"] = "fixed-host"
+        endpoint = next(iter(container["NetworkSettings"]["Networks"].values()))
+        endpoint["IPAddress"] = "172.20.0.2"
+        frozen = guard.freeze(payload, policy)
+        overlay = self.forward(payload, policy)
+        endpoint["IPAddress"] = "172.20.0.3"
+        self.assert_blocked(payload, policy, frozen, post=True, candidate_file=overlay)
+        endpoint["IPAddress"] = "172.20.0.2"
+        container["Config"]["Hostname"] = "unexpected-host"
+        self.assert_blocked(payload, policy, frozen, post=True, candidate_file=overlay)
+
+    def test_declared_version_variables_and_duplicate_keys_are_not_exempt(self):
+        payload, policy = fixture()
+        service = policy["targets"][0]
+        for model in [payload["before"], payload["after"]]:
+            model["services"][service]["environment"]["NODE_VERSION"] = "old"
+        frozen = guard.freeze(payload, policy)
+        overlay = self.forward(payload, policy)
+        self.assert_blocked(payload, policy, frozen, post=True, candidate_file=overlay)
+        payload, policy = fixture()
+        payload["containers"][0]["Config"]["Env"].append("NODE_VERSION=duplicate")
+        self.assert_blocked(payload, policy)
+
     def assert_blocked(self, payload, policy, frozen=None, **options):
         with self.assertRaises(guard.RolloutError):
             if frozen is None:
@@ -196,6 +331,7 @@ class ImageRolloutTests(unittest.TestCase):
             if service in policy["targets"]:
                 container["Id"] += "-forward"
                 container["Image"] = frozen["candidate_images"][service]
+                container["Config"]["Image"] = container["Image"]
                 container["Config"]["Env"][-1] = "NODE_VERSION=new"
                 container["Config"]["Labels"]["com.docker.compose.project.config_files"] += "," + overlay
                 payload["after"]["services"][service]["image"] = frozen["rollback_images"][service]
@@ -205,6 +341,7 @@ class ImageRolloutTests(unittest.TestCase):
             if service in policy["targets"]:
                 container["Id"] += "-rollback"
                 container["Image"] = frozen["rollback_images"][service]
+                container["Config"]["Image"] = container["Image"]
                 container["Config"]["Env"][-1] = "NODE_VERSION=old"
         self.assertTrue(guard.check(payload, policy, frozen, post=True, candidate_file=overlay, rollback=True)["ok"])
 
@@ -225,6 +362,40 @@ class ImageRolloutTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertNotIn("must-not-be-printed", result.stdout + result.stderr)
             self.assertNotIn("Traceback", result.stderr)
+
+    def test_live_postcheck_keeps_rollback_metadata_available_without_mutation(self):
+        payload, policy = fixture()
+        frozen = guard.freeze(payload, policy)
+        overlay = self.forward(payload, policy)
+        requests = []
+
+        def metadata(command):
+            requests.append(command)
+            if command[:2] == ["docker", "compose"]:
+                return payload["after"] if overlay in command else payload["before"]
+            if command[:2] == ["docker", "inspect"]:
+                return payload["containers"]
+            self.assertEqual(command[:3], ["docker", "image", "inspect"])
+            return [image for image in payload["images"] if image["Id"] in command[3:]]
+
+        with tempfile.TemporaryDirectory(prefix="image-guard-live-fixture-") as directory:
+            frozen_path = Path(directory) / "frozen.json"
+            frozen_path.write_text(json.dumps(frozen))
+            argv = ["guard", "--profiles", str(ROOT / "deploy/image-rollout/profiles.json"),
+                    "--environment", "qa", "--live", "--post", "--candidate-file", overlay,
+                    "--frozen", str(frozen_path)]
+            stdout, stderr = io.StringIO(), io.StringIO()
+            ids = "\n".join(container["Id"] for container in payload["containers"])
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(guard, "read_json", side_effect=metadata), \
+                 mock.patch.object(guard.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, ids)) as probe, \
+                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                self.assertEqual(guard.main(), 0, stderr.getvalue())
+            self.assertTrue(json.loads(stdout.getvalue())["ok"])
+            self.assertNotIn("fixture-only", stdout.getvalue() + stderr.getvalue())
+            self.assertEqual(probe.call_args.args[0], ["docker", "ps", "-aq", "--filter",
+                                                     "label=com.docker.compose.project=" + policy["project"]])
+            inspect = next(command for command in requests if command[:3] == ["docker", "image", "inspect"])
+            self.assertTrue(set(frozen["rollback_images"].values()).issubset(inspect[3:]))
 
 
 if __name__ == "__main__":
