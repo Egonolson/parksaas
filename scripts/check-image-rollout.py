@@ -51,7 +51,7 @@ def stable_env(values, definition):
     return {key: value for key, value in values.items() if key not in VERSION_ENV or key in declared}
 
 
-def target_fingerprint(container, definition, model):
+def target_fingerprint(container, definition, model, image):
     """Freeze all inspect configuration, with explicit recreate-only normalization."""
     config = copy.deepcopy(container["Config"])
     config["Env"] = stable_env(env_map(config.get("Env", [])), definition)
@@ -61,6 +61,16 @@ def target_fingerprint(container, definition, model):
     if not definition.get("hostname") and config.get("Hostname") == identifier[:12]:
         config["Hostname"] = "<automatic-container-hostname>"
     labels = config.get("Labels") or {}
+    revision = "org.opencontainers.image.revision"
+    declared_labels = definition.get("labels") or {}
+    require(isinstance(declared_labels, dict), "resolved runtime label mapping required")
+    if revision in declared_labels:
+        require(labels.get(revision) == str(declared_labels[revision]), "declared source revision label drift")
+    else:
+        defaults = image["Config"].get("Labels") or {}
+        require((revision in labels) == (revision in defaults) and labels.get(revision) == defaults.get(revision),
+                "source revision must be inherited unchanged from inspected image")
+        labels.pop(revision, None)
     for name in ("com.docker.compose.config-hash", "com.docker.compose.image",
                  "com.docker.compose.replace", "com.docker.compose.project.config_files"):
         labels.pop(name, None)
@@ -213,7 +223,7 @@ def runtime_state(payload, policy, config, post=False, candidate_file=None, runt
         entry = {"ports": ports, "networks": networks, "mounts": mounts, "hardening": security,
                  "environment": declared_env}
         if service in policy["targets"]:
-            entry["complete_target"] = target_fingerprint(container, definition, config)
+            entry["complete_target"] = target_fingerprint(container, definition, config, image)
         if service not in policy["targets"]:
             entry.update(container_id=container["Id"], image_id=container["Image"])
             entry["all_peers"] = sorted([{

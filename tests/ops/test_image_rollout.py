@@ -58,6 +58,76 @@ def fixture(environment="qa"):
 
 
 class ImageRolloutTests(unittest.TestCase):
+    def test_only_image_inherited_source_revision_may_appear_on_recreate(self):
+        payload, policy = fixture()
+        key = "org.opencontainers.image.revision"
+        revision = hashlib.sha256(b"synthetic-source").hexdigest()
+        for service in policy["targets"]:
+            candidate = payload["after"]["services"][service]["image"]
+            next(image for image in payload["images"] if image["Id"] == candidate)["Config"]["Labels"] = {key: revision}
+        frozen = guard.freeze(payload, policy)
+        overlay = self.forward(payload, policy)
+        for container in payload["containers"]:
+            if container["Config"]["Labels"]["com.docker.compose.service"] in policy["targets"]:
+                container["Config"]["Labels"][key] = revision
+        self.assertTrue(guard.check(payload, policy, frozen, post=True, candidate_file=overlay)["ok"])
+        payload["containers"][0]["Config"]["Labels"].pop(key)
+        self.assert_blocked(payload, policy, frozen, post=True, candidate_file=overlay)
+        payload["containers"][0]["Config"]["Labels"][key] = "manual-override"
+        self.assert_blocked(payload, policy, frozen, post=True, candidate_file=overlay)
+        payload["containers"][0]["Config"]["Labels"][key] = revision
+        for service in policy["targets"]:
+            payload["after"]["services"][service]["image"] = frozen["rollback_images"][service]
+        self.assertTrue(guard.check(payload, policy, frozen, rollback=True, candidate_file=overlay)["ok"])
+        for container in payload["containers"]:
+            service = container["Config"]["Labels"]["com.docker.compose.service"]
+            if service in policy["targets"]:
+                container["Image"] = frozen["rollback_images"][service]
+                container["Config"]["Env"][-1] = "NODE_VERSION=old"
+                container["Config"]["Labels"].pop(key)
+        self.assertTrue(guard.check(payload, policy, frozen, post=True, rollback=True, candidate_file=overlay)["ok"])
+
+    def test_manual_revision_without_image_default_is_rejected_before_freeze(self):
+        payload, policy = fixture()
+        payload["containers"][0]["Config"]["Labels"]["org.opencontainers.image.revision"] = "manual-override"
+        self.assert_blocked(payload, policy)
+
+    def test_compose_revision_override_and_other_inherited_labels_stay_frozen(self):
+        key = "org.opencontainers.image.revision"
+        payload, policy = fixture()
+        service = policy["targets"][0]
+        for model in [payload["before"], payload["after"]]:
+            model["services"][service]["labels"] = {key: "declared-runtime-revision"}
+        payload["containers"][0]["Config"]["Labels"][key] = "declared-runtime-revision"
+        candidate = payload["after"]["services"][service]["image"]
+        next(image for image in payload["images"] if image["Id"] == candidate)["Config"]["Labels"] = {key: "new-image-default"}
+        frozen = guard.freeze(payload, policy)
+        overlay = self.forward(payload, policy)
+        self.assertTrue(guard.check(payload, policy, frozen, post=True, candidate_file=overlay)["ok"])
+        payload["containers"][0]["Config"]["Labels"][key] = "new-image-default"
+        self.assert_blocked(payload, policy, frozen, post=True, candidate_file=overlay)
+        for other in ["org.opencontainers.image.version", "unrecognized.label", "traefik.http.routers.app.rule"]:
+            with self.subTest(key=other):
+                payload, policy = fixture()
+                frozen = guard.freeze(payload, policy)
+                overlay = self.forward(payload, policy)
+                container = payload["containers"][0]
+                container["Config"]["Labels"][other] = "new-inherited-value"
+                next(image for image in payload["images"] if image["Id"] == container["Image"])["Config"]["Labels"] = {other: "new-inherited-value"}
+                self.assert_blocked(payload, policy, frozen, post=True, candidate_file=overlay)
+
+    def test_revision_metadata_normalization_does_not_relax_raw_preflight_hash(self):
+        payload, policy = fixture()
+        key = "org.opencontainers.image.revision"
+        container = payload["containers"][0]
+        image = next(image for image in payload["images"] if image["Id"] == container["Image"])
+        image["Config"]["Labels"] = {key: "old-source"}
+        container["Config"]["Labels"][key] = "old-source"
+        frozen = guard.freeze(payload, policy)
+        image["Config"]["Labels"][key] = "changed-source"
+        container["Config"]["Labels"][key] = "changed-source"
+        self.assert_blocked(payload, policy, frozen)
+
     def private_snapshot_files(self, directory):
         root = Path(directory).resolve()
         project, checkpoint = root / "project", root / "checkpoint"

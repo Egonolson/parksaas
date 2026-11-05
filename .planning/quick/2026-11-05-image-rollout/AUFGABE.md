@@ -67,3 +67,11 @@ Abschluss-Snapshotprüfung: CLI-Fall zusätzlich mit tatsächlichem simuliertem 
 Kurzplan: vor Freeze/erstem Cutover kanonische Snapshotpfade bestimmen und deren Dateisystemidentität (st_dev/st_ino) gegen die jeweilige Originaldatei vergleichen; Aliase und Hardlinks ablehnen, Collector/Operator auf denselben kanonischen Pfad binden. Keine Originalauflösung/-stat/-Lektüre nach Swap oder beim Rückweg.
 
 Rot: Ran 35 tests / FAILED (failures=5): Originalbasis- und Original-ENV-Aliase mit .., jeweils Hardlinks und fehlende Kanonisierung eigenständiger Kopien. Grün: Ran 35 tests / OK pro Repository. Positiver Test entfernt anschließend beide Originaldateien und bestätigt unveränderte Snapshot-Metadaten; bestehender CLI-Post-/Rückwegfall bleibt grün. Keine echten Konfigurationen/Dateien gelesen, keine Server-/Dockeraktion. Bestehendes Freezeformat 3 bleibt bestehen; Operator verwendet kanonische Pfade aus frozen.runtime_files. Unabhängige Nachprüfung des neuen Heads offen.
+
+## Geprüfte Image-Quellrevision als eng begrenzte Metadatenausnahme
+
+Kurzplan: ausschließlich org.opencontainers.image.revision normalisieren, wenn sie unverändert vom lokal per ID inspizierten Image geerbt wird und kein Compose-Runtimeoverride vorliegt. Keine allgemeine Labelfilterung; alle anderen Labels und rohen Preflight-Hashes behalten ihren Schutz.
+
+Root-Metadatenbeleg outputs/rollout/remediation/parksaas-qa-image-label-diff.json (geschützter Taskbeleg, nicht hochgeladen): neue Parkimages besitzen zusätzlich das OCI-Quellrevisionslabel; Composeversion alt/aktuell jeweils 5.0.2. Die Quellinhalts-/Archivprüfung bleibt separat bei Root. OCI-Annotationsspezifikation und Docker-LABEL-Dokumentation konsultiert.
+
+Rot: Ran 39 tests / FAILED (failures=1, errors=1): korrekter geerbter neuer Quellrevisionseintrag wurde abgewiesen; manueller Revisionseintrag ohne Image-Default zunächst akzeptiert. Grün: Ran 39 tests / OK. Positive alte-ohne/neue-geerbte-Revision und Rückweg; negative fehlende/manuelle Revision, Compose-Overrideänderung, zusätzliche OCI-Version/unbekannte/Routinglabels; roher Preflight-Hash bleibt wirksam. Umsetzung identisch in beiden Guards; keine Erweiterung für Peers, keine Workflow-/App-/Image-/Serveränderung. Neue unabhängige Nachprüfung erforderlich.
