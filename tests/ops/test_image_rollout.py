@@ -58,6 +58,35 @@ def fixture(environment="qa"):
 
 
 class ImageRolloutTests(unittest.TestCase):
+    def test_docker_empty_user_matches_absent_image_user_without_other_process_exemptions(self):
+        payload, policy = fixture()
+        service = policy["targets"][-1]  # Park's actual mismatch is the frontend.
+        container = next(item for item in payload["containers"] if item["Config"]["Labels"]["com.docker.compose.service"] == service)
+        container["Config"]["User"] = ""
+        for image in payload["images"]:
+            if image["Id"] in (container["Image"], payload["after"]["services"][service]["image"]):
+                image["Config"]["User"] = None
+        frozen = guard.freeze(payload, policy)
+        self.assertTrue(guard.check(payload, policy, frozen)["ok"])
+        overlay = self.forward(payload, policy)
+        self.assertTrue(guard.check(payload, policy, frozen, post=True, candidate_file=overlay)["ok"])
+        for value in ["root", "node", "0", " "]:
+            with self.subTest(user=value):
+                container["Config"]["User"] = value
+                self.assert_blocked(payload, policy, frozen, post=True, candidate_file=overlay)
+
+    def test_only_user_empty_default_is_equivalent_to_none(self):
+        for key in ["User", "Cmd", "Entrypoint", "WorkingDir"]:
+            with self.subTest(key=key):
+                payload, policy = fixture()
+                candidate = payload["after"]["services"][policy["targets"][0]]["image"]
+                next(image for image in payload["images"] if image["Id"] == candidate)["Config"][key] = ""
+                if key == "User":
+                    frozen = guard.freeze(payload, policy)
+                    self.assertTrue(guard.check(payload, policy, frozen)["ok"])
+                else:
+                    self.assert_blocked(payload, policy)
+
     def test_only_image_inherited_source_revision_may_appear_on_recreate(self):
         payload, policy = fixture()
         key = "org.opencontainers.image.revision"

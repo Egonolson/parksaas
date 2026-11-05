@@ -51,6 +51,11 @@ def stable_env(values, definition):
     return {key: value for key, value in values.items() if key not in VERSION_ENV or key in declared}
 
 
+def process_value(key, value):
+    # Docker's unset image User (null) and runtime User ("") both mean no override.
+    return "" if key == "User" and value is None else value
+
+
 def target_fingerprint(container, definition, model, image):
     """Freeze all inspect configuration, with explicit recreate-only normalization."""
     config = copy.deepcopy(container["Config"])
@@ -219,7 +224,8 @@ def runtime_state(payload, policy, config, post=False, candidate_file=None, runt
                     require(isinstance(expected_process, list), "resolved process array required")
                 else:
                     expected_process = str(expected_process)
-                require(container["Config"].get(key) == expected_process, "unreproducible runtime process override")
+                require(process_value(key, container["Config"].get(key)) == process_value(key, expected_process),
+                        "unreproducible runtime process override")
         entry = {"ports": ports, "networks": networks, "mounts": mounts, "hardening": security,
                  "environment": declared_env}
         if service in policy["targets"]:
@@ -295,7 +301,8 @@ def check(payload, policy, frozen, post=False, candidate_file=None, rollback=Fal
         # An image-only release must preserve process/user defaults too. Fail closed
         # even if Compose overrides them; a deliberate change needs its own review.
         for key in ("User", "Cmd", "Entrypoint", "WorkingDir", "StopSignal", "Healthcheck", "ExposedPorts", "Volumes", "Shell"):
-            require(baseline["Config"].get(key) == image["Config"].get(key), "candidate process defaults changed")
+            require(process_value(key, baseline["Config"].get(key)) == process_value(key, image["Config"].get(key)),
+                    "candidate process defaults changed")
         for key in ["image", "pull_policy"]:
             before["services"][service].pop(key, None)
             after["services"][service].pop(key, None)

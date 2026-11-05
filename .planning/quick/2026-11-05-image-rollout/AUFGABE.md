@@ -75,3 +75,10 @@ Kurzplan: ausschließlich org.opencontainers.image.revision normalisieren, wenn 
 Root-Metadatenbeleg outputs/rollout/remediation/parksaas-qa-image-label-diff.json (geschützter Taskbeleg, nicht hochgeladen): neue Parkimages besitzen zusätzlich das OCI-Quellrevisionslabel; Composeversion alt/aktuell jeweils 5.0.2. Die Quellinhalts-/Archivprüfung bleibt separat bei Root. OCI-Annotationsspezifikation und Docker-LABEL-Dokumentation konsultiert.
 
 Rot: Ran 39 tests / FAILED (failures=1, errors=1): korrekter geerbter neuer Quellrevisionseintrag wurde abgewiesen; manueller Revisionseintrag ohne Image-Default zunächst akzeptiert. Grün: Ran 39 tests / OK. Positive alte-ohne/neue-geerbte-Revision und Rückweg; negative fehlende/manuelle Revision, Compose-Overrideänderung, zusätzliche OCI-Version/unbekannte/Routinglabels; roher Preflight-Hash bleibt wirksam. Umsetzung identisch in beiden Guards; keine Erweiterung für Peers, keine Workflow-/App-/Image-/Serveränderung. Neue unabhängige Nachprüfung erforderlich.
+
+## Realer Docker-Leerwert: ausschließlich User
+
+Kurzplan: nur im User-Prozessvergleich null und leeren String als keinen Override gleichsetzen, alle konkreten Benutzer und Cmd/Entrypoint/WorkingDir strikt lassen. Rohe vollständige Config-/Preflight-Fingerprints werden nicht normalisiert.
+
+Root-Teilbeleg outputs/rollout/remediation/parksaas-process-default-diff.json (nicht ins Repo aufgenommen): ausschließlich Frontend-Config.User ist leerer String gegenüber ImageDefault.User=null, alle anderen Prozessfelder stimmen. Reale Form als synthetische Fixture reproduziert; Docker-USER-/Runtime-Dokumentation konsultiert.
+Rot: Ran 41 tests / FAILED (errors=2), exakt unbegründete Ablehnung dieses User-Leerwerts und entsprechender leerer Kandidaten-Defaults. Grün: Ran 41 tests / OK. Vor-/Nachprüfung der realen Form, Ablehnung konkreter Benutzer root/node/0/Whitespace sowie unverändert strikte Cmd-/Entrypoint-/WorkingDir-Leerwertfälle. Bestehende Suite einschließlich aller Snapshot-/Label-/Rückwegfälle grün. Kein Workflow-/App-/Image-/Servereingriff. Gezielte unabhängige Peerprüfung bleibt erforderlich.

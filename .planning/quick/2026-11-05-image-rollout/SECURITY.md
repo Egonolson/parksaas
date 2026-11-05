@@ -43,3 +43,12 @@ Root-Metadatenbeleg outputs/rollout/remediation/parksaas-qa-image-label-diff.jso
 Rot: Ran 39 tests / FAILED (failures=1, errors=1): korrekter geerbter neuer Quellrevisionseintrag wurde abgewiesen; manueller Revisionseintrag ohne Image-Default zunächst akzeptiert. Grün: Ran 39 tests / OK. Positive alte-ohne/neue-geerbte-Revision und Rückweg; negative fehlende/manuelle Revision, Compose-Overrideänderung, zusätzliche OCI-Version/unbekannte/Routinglabels; roher Preflight-Hash bleibt wirksam. Umsetzung identisch in beiden Guards; keine Erweiterung für Peers, keine Workflow-/App-/Image-/Serveränderung. Neue unabhängige Nachprüfung erforderlich.
 
 Quellrevisions-Korrektur, Gate-1-Abschluss: sechs Dateien, 0 typisierte Funde, zwei unveränderte beschreibende Wortmuster (Runbookquellenabschnitt Zeile 92; Fehlerunterdrückungskommentar jetzt Helperzeile 447). Keine Werte, ausdrücklich triagiert; Scanexit 1 wegen Wortmustern. AST/Profile-JSON und Diffcheck erfolgreich, bestehende Workflows bytegleich. Synthetische Suite 39/39, kein echter Docker-/Serverlauf.
+
+## Realer Docker-Leerwert: ausschließlich User
+
+Kurzplan: nur im User-Prozessvergleich null und leeren String als keinen Override gleichsetzen, alle konkreten Benutzer und Cmd/Entrypoint/WorkingDir strikt lassen. Rohe vollständige Config-/Preflight-Fingerprints werden nicht normalisiert.
+
+Root-Teilbeleg outputs/rollout/remediation/parksaas-process-default-diff.json (nicht ins Repo aufgenommen): ausschließlich Frontend-Config.User ist leerer String gegenüber ImageDefault.User=null, alle anderen Prozessfelder stimmen. Reale Form als synthetische Fixture reproduziert; Docker-USER-/Runtime-Dokumentation konsultiert.
+Rot: Ran 41 tests / FAILED (errors=2), exakt unbegründete Ablehnung dieses User-Leerwerts und entsprechender leerer Kandidaten-Defaults. Grün: Ran 41 tests / OK. Vor-/Nachprüfung der realen Form, Ablehnung konkreter Benutzer root/node/0/Whitespace sowie unverändert strikte Cmd-/Entrypoint-/WorkingDir-Leerwertfälle. Bestehende Suite einschließlich aller Snapshot-/Label-/Rückwegfälle grün. Kein Workflow-/App-/Image-/Servereingriff. Gezielte unabhängige Peerprüfung bleibt erforderlich.
+
+User-Leerwert-Korrektur, Gate 1: sechs Dateien, 0 typisierte Funde, zwei bekannte rein beschreibende Wortmuster (Runbookquellen Zeile 92, Fehlerunterdrückungskommentar jetzt Helperzeile 454). Keine Werte, ausdrücklich triagiert; Scanexit 1 wegen Wortmustern. AST/Profile-JSON und Diffcheck erfolgreich, Workflows unverändert; 41/41 synthetische Tests pro Repo. Kein Docker-/Serverlauf.
