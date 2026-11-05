@@ -58,6 +58,46 @@ def fixture(environment="qa"):
 
 
 class ImageRolloutTests(unittest.TestCase):
+    def test_only_inherited_upstream_acme_module_version_may_change(self):
+        payload, policy = fixture()
+        service = policy["targets"][-1]
+        container = next(item for item in payload["containers"] if item["Config"]["Labels"]["com.docker.compose.service"] == service)
+        old = next(image for image in payload["images"] if image["Id"] == container["Image"])
+        new = next(image for image in payload["images"] if image["Id"] == payload["after"]["services"][service]["image"])
+        container["Config"]["Env"].insert(0, "ACME_VERSION=0.1.0")
+        old["Config"]["Env"].insert(0, "ACME_VERSION=0.1.0")
+        new["Config"]["Env"].insert(0, "ACME_VERSION=0.2.0")
+        frozen = guard.freeze(payload, policy)
+        self.assertTrue(guard.check(payload, policy, frozen)["ok"])
+        overlay = self.forward(payload, policy)
+        container["Config"]["Env"][0] = "ACME_VERSION=0.2.0"
+        self.assertTrue(guard.check(payload, policy, frozen, post=True, candidate_file=overlay)["ok"])
+        container["Config"]["Env"][0] = "ACME_VERSION=manual-override"
+        self.assert_blocked(payload, policy, frozen, post=True, candidate_file=overlay)
+        container["Config"]["Env"][0] = "ACME_VERSION=0.2.0"
+        for target in policy["targets"]:
+            payload["after"]["services"][target]["image"] = frozen["rollback_images"][target]
+        self.assertTrue(guard.check(payload, policy, frozen, rollback=True, candidate_file=overlay)["ok"])
+        for item in payload["containers"]:
+            target = item["Config"]["Labels"]["com.docker.compose.service"]
+            if target in policy["targets"]:
+                item["Image"] = frozen["rollback_images"][target]
+                item["Config"]["Env"][-1] = "NODE_VERSION=old"
+        container["Config"]["Env"][0] = "ACME_VERSION=0.1.0"
+        self.assertTrue(guard.check(payload, policy, frozen, post=True, rollback=True, candidate_file=overlay)["ok"])
+
+    def test_declared_acme_version_is_not_exempt(self):
+        payload, policy = fixture()
+        service = policy["targets"][-1]
+        for model in [payload["before"], payload["after"]]:
+            model["services"][service]["environment"]["ACME_VERSION"] = "explicit-app-value"
+        container = next(item for item in payload["containers"] if item["Config"]["Labels"]["com.docker.compose.service"] == service)
+        container["Config"]["Env"].insert(0, "ACME_VERSION=explicit-app-value")
+        frozen = guard.freeze(payload, policy)
+        overlay = self.forward(payload, policy)
+        container["Config"]["Env"][0] = "ACME_VERSION=changed-app-value"
+        self.assert_blocked(payload, policy, frozen, post=True, candidate_file=overlay)
+
     def test_docker_empty_user_matches_absent_image_user_without_other_process_exemptions(self):
         payload, policy = fixture()
         service = policy["targets"][-1]  # Park's actual mismatch is the frontend.
@@ -380,7 +420,7 @@ class ImageRolloutTests(unittest.TestCase):
                     self.assert_blocked(payload, policy, frozen, post=post, candidate_file=overlay)
 
     def test_candidate_must_preserve_mail_and_unknown_inherited_environment(self):
-        for key in ["MAIL_MODE", "UNRECOGNIZED_INHERITED", "APP_VERSION"]:
+        for key in ["MAIL_MODE", "UNRECOGNIZED_INHERITED", "APP_VERSION", "ACME_VERSION_EXTRA", "ACME_ISSUER", "ACME_MODE"]:
             with self.subTest(key=key):
                 payload, policy = fixture()
                 container = payload["containers"][0]

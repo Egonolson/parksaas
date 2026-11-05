@@ -36,7 +36,7 @@ def env_map(values):
 # Only these upstream runtime version markers may change with the selected image.
 # Application flags, PATH, mail settings and unknown inherited values remain frozen.
 VERSION_ENV = frozenset({"NODE_VERSION", "YARN_VERSION", "NGINX_VERSION", "NJS_VERSION",
-                         "NJS_RELEASE", "PKG_RELEASE", "DYNPKG_RELEASE"})
+                         "NJS_RELEASE", "PKG_RELEASE", "DYNPKG_RELEASE", "ACME_VERSION"})
 
 
 def effective_env(image, definition):
